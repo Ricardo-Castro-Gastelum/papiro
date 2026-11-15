@@ -4,6 +4,8 @@
 
 # Papiro
 
+[![crates.io](https://img.shields.io/crates/v/ppr.svg)](https://crates.io/crates/ppr)
+
 Un editor y lector de archivos Markdown para la terminal, escrito en Rust.
 
 Papiro se integra con la terminal en lugar de sentirse como una aplicación
@@ -11,9 +13,10 @@ aparte: usa el fondo y los colores por defecto, no dibuja marcos y no muestra
 pantallas de bienvenida. Al ejecutar `ppr archivo.md`, el archivo se abre
 directamente.
 
-> Estado: Fase 6 completada. Ya se puede editar y guardar, leer el documento
-> con el Markdown renderizado, deshacer y rehacer los cambios, ajustar las
-> líneas al ancho de la terminal y buscar texto dentro del documento.
+> Estado: Fase 6 completada. Papiro se publica como el paquete `ppr` en
+> crates.io. Ya se puede editar y guardar, leer el documento con el Markdown
+> renderizado, deshacer y rehacer los cambios, ajustar las líneas al ancho de
+> la terminal y buscar texto dentro del documento.
 
 ## Requisitos
 
@@ -137,7 +140,7 @@ El editor normaliza los finales de línea a LF y guarda siempre en UTF-8.
 
 ## Instalación
 
-Cuando el proyecto se publique en crates.io:
+Desde crates.io:
 
 ```bash
 cargo install ppr
@@ -157,3 +160,11 @@ cp target/release/ppr ~/.local/bin/
 ```
 
 Asegúrate de que `~/.local/bin` esté en tu `PATH`.
+
+## Licencia
+
+Papiro se distribuye bajo la licencia dual MIT o Apache 2.0. Puedes elegir la
+que prefieras:
+
+- [MIT](LICENSE-MIT)
+- [Apache 2.0](LICENSE-APACHE)
