@@ -1,0 +1,21 @@
+[package]
+name = "ppr"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A minimal terminal Markdown editor and viewer."
+readme = "README.md"
+keywords = ["markdown", "editor", "terminal", "tui", "cli"]
+categories = ["command-line-utilities", "text-editors"]
+# TODO: repository = "https://github.com/tu-usuario/papiro"
+# TODO: license = "MIT OR Apache-2.0"
+include = ["Cargo.toml", "README.md", "src/**"]
+
+[dependencies]
+anyhow = "1.0"
+crossterm = "0.29"
+pulldown-cmark = { version = "0.13", default-features = false }
+ratatui = "0.30"
+tempfile = "3.27"
+unicode-segmentation = "1.13"
+unicode-width = "0.2"
