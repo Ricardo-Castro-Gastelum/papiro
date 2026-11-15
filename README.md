@@ -7,10 +7,9 @@ aparte: usa el fondo y los colores por defecto, no dibuja marcos y no muestra
 pantallas de bienvenida. Al ejecutar `ppr archivo.md`, el archivo se abre
 directamente.
 
-> Estado: Fase 4 completada. Ya se puede editar y guardar, leer el documento
-> con el Markdown renderizado, ver la posición del cursor y recibir un aviso
-> antes de salir con cambios sin guardar. Deshacer/rehacer y el ajuste de
-> líneas del modo Fuente llegarán en las siguientes fases.
+> Estado: Fase 5 completada. Ya se puede editar y guardar, leer el documento
+> con el Markdown renderizado, deshacer y rehacer los cambios, y ajustar las
+> líneas del modo Fuente al ancho de la terminal.
 
 ## Requisitos
 
@@ -20,7 +19,7 @@ directamente.
 ## Compilación
 
 ```bash
-git clone <repositorio>
+git clone https://github.com/Ricardo-Castro-Gastelum/papiro.git
 cd papiro
 cargo build --release
 ```
@@ -52,14 +51,32 @@ Escribe la ruta y pulsa `Enter` para guardar, o `Esc` para cancelar.
 | `Retroceso` | Borrar el carácter anterior |
 | `Supr` | Borrar el carácter siguiente |
 | `Tab` | Insertar dos espacios |
+| `Ctrl+Z` | Deshacer |
+| `Ctrl+Y` / `Ctrl+Shift+Z` | Rehacer |
 | `Ctrl+V` | Alternar entre Fuente y Vista |
 | `Esc` | Volver de Vista a Fuente |
 | `Ctrl+S` | Guardar |
 | `Ctrl+Q` | Salir (pide confirmación si hay cambios sin guardar) |
 
-En esta fase, `Ctrl+Q` sale de inmediato si no hay cambios pendientes. Si los
-hay, la línea inferior muestra un aviso: `Ctrl+Q` otra vez descarta los cambios
-y sale, `Ctrl+S` guarda y cualquier otra tecla (incluido `Esc`) cancela.
+`Ctrl+Q` sale de inmediato si no hay cambios pendientes. Si los hay, la línea
+inferior muestra un aviso: `Ctrl+Q` otra vez descarta los cambios y sale,
+`Ctrl+S` guarda y cualquier otra tecla (incluido `Esc`) cancela.
+
+## Deshacer y rehacer
+
+`Ctrl+Z` deshace la última edición y `Ctrl+Y` (o `Ctrl+Shift+Z`) la rehace. El
+tecleo seguido y los borrados seguidos se agrupan en un solo paso; mover el
+cursor, cambiar de modo o guardar cierra el grupo. Deshacer también devuelve el
+cursor a donde estaba y, si el texto vuelve exactamente al estado guardado, el
+punto `•` desaparece de la barra de estado.
+
+## Ajuste de líneas
+
+En el modo Fuente, las líneas más largas que la terminal se muestran en varias
+filas sin modificar el archivo. Las flechas verticales y `Re Pág`/`Av Pág`
+recorren esas filas y conservan la columna visual al pasar de una a otra.
+`Inicio` y `Fin` siguen yendo al principio y al final de la línea lógica. En el
+modo Vista el texto también se ajusta, pero allí solo se desplaza la lectura.
 
 ## Barra de estado
 

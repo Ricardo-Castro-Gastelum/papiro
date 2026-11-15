@@ -8,12 +8,15 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
-use crate::editor::{Editor, display_line};
+use crate::editor::{Editor, VisualRow, display_range};
 
-const SAVE_HINT: &str = "Ctrl+S · guardar   Ctrl+V · vista   Ctrl+Q · salir ";
+const SAVE_HINT: &str =
+    "Ctrl+S · guardar   Ctrl+V · vista   Ctrl+Z · deshacer   Ctrl+Y · rehacer   Ctrl+Q · salir ";
 const VIEW_HINT: &str = "Ctrl+V · editar   Ctrl+Q · salir ";
-const COMPACT_SAVE_HINT: &str = "^S guardar  ^V vista  ^Q salir ";
-const COMPACT_VIEW_HINT: &str = "^V editar  ^Q salir ";
+const COMPACT_SAVE_HINT: &str = "^S guardar ^V vista ^Z deshacer ^Y rehacer ^Q salir ";
+const COMPACT_VIEW_HINT: &str = "^V editar ^Q salir ";
+const MINIMAL_SAVE_HINT: &str = "^S ^V ^Z ^Y ^Q ";
+const MINIMAL_VIEW_HINT: &str = "^V ^Q ";
 const PROMPT_LABEL: &str = " Guardar como: ";
 
 /// Área de texto más una línea discreta para el nombre del archivo, los
@@ -24,14 +27,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let [text_area, footer_area] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
 
-    if app.is_view_mode() {
+    let source_rows = if app.is_view_mode() {
         app.ensure_view(text_area.width, usize::from(text_area.height));
         draw_view(frame, text_area, app);
+        None
     } else {
         app.editor
             .ensure_visible(text_area.width as usize, text_area.height as usize);
-        draw_source(frame, text_area, app);
-    }
+        let rows = app.editor.rows();
+        draw_source(frame, text_area, app, &rows);
+        Some(rows)
+    };
 
     draw_footer(frame, footer_area, app);
 
@@ -39,26 +45,26 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         if let Some(position) = prompt_cursor(footer_area, input) {
             frame.set_cursor_position(position);
         }
-    } else if !app.is_view_mode()
-        && let Some(position) = cursor_position(&app.editor, text_area)
+    } else if let Some(rows) = &source_rows
+        && let Some(position) = cursor_position(&app.editor, rows, text_area)
     {
         frame.set_cursor_position(position);
     }
 }
 
-fn draw_source(frame: &mut Frame, area: Rect, app: &App) {
-    let lines = app
-        .editor
-        .lines()
+fn draw_source(frame: &mut Frame, area: Rect, app: &App, rows: &[VisualRow]) {
+    let start = app.editor.scroll_row().min(rows.len());
+    let end = (start + usize::from(area.height)).min(rows.len());
+
+    let lines = rows[start..end]
         .iter()
-        .map(|line| Line::raw(display_line(line)))
+        .map(|row| {
+            let line = &app.editor.lines()[row.line];
+            Line::raw(display_range(line, row.start, row.end))
+        })
         .collect::<Vec<_>>();
 
-    let paragraph = Paragraph::new(lines).scroll((
-        scroll_offset(app.editor.scroll_line()),
-        scroll_offset(app.editor.scroll_column()),
-    ));
-    frame.render_widget(paragraph, area);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 /// Dibuja solo las líneas visibles del documento renderizado. El ajuste de
@@ -75,9 +81,9 @@ fn draw_view(frame: &mut Frame, area: Rect, app: &App) {
 
 /// Posición del cursor en coordenadas de pantalla, si queda dentro del área
 /// visible.
-fn cursor_position(editor: &Editor, area: Rect) -> Option<(u16, u16)> {
-    let row = u16::try_from(editor.cursor_line().checked_sub(editor.scroll_line())?).ok()?;
-    let column = u16::try_from(editor.cursor_cell().checked_sub(editor.scroll_column())?).ok()?;
+fn cursor_position(editor: &Editor, rows: &[VisualRow], area: Rect) -> Option<(u16, u16)> {
+    let row = u16::try_from(editor.cursor_row(rows).checked_sub(editor.scroll_row())?).ok()?;
+    let column = u16::try_from(editor.cursor_row_cell(rows)).ok()?;
 
     if row >= area.height || column >= area.width {
         return None;
@@ -132,6 +138,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         COMPACT_SAVE_HINT
     };
+    let minimal_hint = if app.is_view_mode() {
+        MINIMAL_VIEW_HINT
+    } else {
+        MINIMAL_SAVE_HINT
+    };
 
     // Primero se intenta mostrar la posición del cursor y los atajos
     // completos; si no caben junto al nombre, se van acortando por orden.
@@ -144,11 +155,16 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             app.editor.cursor_column() + 1
         )
     };
-    let chosen = [format!("{position}{full_hint}"), full_hint.to_owned()]
-        .into_iter()
-        .chain(std::iter::once(compact_hint.to_owned()))
-        .find(|hint| fits(hint, name_width, area.width))
-        .unwrap_or_else(|| compact_hint.to_owned());
+    let chosen = [
+        format!("{position}{full_hint}"),
+        full_hint.to_owned(),
+        format!("{position}{compact_hint}"),
+        compact_hint.to_owned(),
+        minimal_hint.to_owned(),
+    ]
+    .into_iter()
+    .find(|hint| fits(hint, name_width, area.width))
+    .unwrap_or_else(|| minimal_hint.to_owned());
 
     // El espacio inicial separa el nombre de los atajos.
     let hints = format!(" {chosen}");
@@ -182,10 +198,6 @@ fn prompt_cursor(area: Rect, input: &str) -> Option<(u16, u16)> {
     let last_column = area.width.saturating_sub(1);
 
     Some((area.x.saturating_add(offset.min(last_column)), area.y))
-}
-
-fn scroll_offset(value: usize) -> u16 {
-    u16::try_from(value).unwrap_or(u16::MAX)
 }
 
 /// Los nombres de archivo y los mensajes pueden contener caracteres de

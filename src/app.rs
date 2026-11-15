@@ -111,6 +111,7 @@ impl App {
     }
 
     fn toggle_view(&mut self) {
+        self.editor.break_undo_group();
         self.view = match self.view.take() {
             Some(_) => None,
             None => Some(View::default()),
@@ -194,6 +195,16 @@ impl App {
                 KeyCode::Esc => self.toggle_view(),
                 _ => {}
             }
+            return;
+        }
+
+        if is_undo(&key) {
+            self.editor.undo();
+            return;
+        }
+
+        if is_redo(&key) {
+            self.editor.redo();
             return;
         }
 
@@ -322,6 +333,21 @@ fn is_view_toggle(key: &KeyEvent) -> bool {
 
     (control && matches!(key.code, KeyCode::Char('v' | 'V')))
         || matches!(key.code, KeyCode::Char('\u{16}'))
+}
+
+fn is_undo(key: &KeyEvent) -> bool {
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
+    control && !shift && matches!(key.code, KeyCode::Char('z' | 'Z' | '\u{1a}'))
+}
+
+fn is_redo(key: &KeyEvent) -> bool {
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
+    (control && matches!(key.code, KeyCode::Char('y' | 'Y' | '\u{19}')))
+        || (control && shift && matches!(key.code, KeyCode::Char('z' | 'Z')))
 }
 
 fn max_scroll(view: &View) -> usize {
@@ -499,5 +525,47 @@ mod tests {
 
         app.view_home();
         assert_eq!(app.view_scroll(), 0);
+    }
+
+    #[test]
+    fn deshace_y_rehace_con_los_atajos() {
+        let mut app = App::new(Editor::from_text("", None));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert_eq!(app.editor.content(), "ab");
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+        assert_eq!(app.editor.content(), "");
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert_eq!(app.editor.content(), "ab");
+    }
+
+    #[test]
+    fn control_mas_shift_z_tambien_rehace() {
+        let mut app = App::new(Editor::from_text("", None));
+
+        app.editor.insert_char('a');
+        app.editor.undo();
+        assert_eq!(app.editor.content(), "");
+
+        app.handle_key(KeyEvent::new(
+            KeyCode::Char('z'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert_eq!(app.editor.content(), "a");
+    }
+
+    #[test]
+    fn deshacer_no_cambia_el_modo_vista() {
+        let mut app = App::new(Editor::from_text("hola", None));
+        app.editor.insert_char('!');
+        app.toggle_view();
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL));
+
+        assert!(app.is_view_mode());
+        assert_eq!(app.editor.content(), "!hola");
     }
 }
