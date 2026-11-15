@@ -9,7 +9,7 @@ keywords = ["markdown", "editor", "terminal", "tui", "cli"]
 categories = ["command-line-utilities", "text-editors"]
 repository = "https://github.com/Ricardo-Castro-Gastelum/papiro"
 # TODO: license = "MIT OR Apache-2.0"
-include = ["Cargo.toml", "README.md", "src/**"]
+include = ["Cargo.toml", "README.md", "assets/**", "src/**"]
 
 [dependencies]
 anyhow = "1.0"

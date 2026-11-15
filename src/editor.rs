@@ -139,6 +139,18 @@ impl Editor {
         self.cursor_column
     }
 
+    /// Coloca el cursor en una posición concreta. Se usa al saltar a una
+    /// coincidencia de búsqueda; si la línea no existe, no hace nada.
+    pub fn set_cursor(&mut self, line: usize, column: usize) {
+        if line >= self.lines.len() {
+            return;
+        }
+
+        self.cursor_line = line;
+        self.cursor_column = column.min(grapheme_count(&self.lines[line]));
+        self.coalesce = None;
+    }
+
     /// Indica si hay cambios pendientes de guardar.
     pub fn is_modified(&self) -> bool {
         self.modified

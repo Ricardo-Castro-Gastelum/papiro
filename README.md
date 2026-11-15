@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/PapiroMd.png" alt="Papiro" width="320">
+</p>
+
 # Papiro
 
 Un editor y lector de archivos Markdown para la terminal, escrito en Rust.
@@ -7,9 +11,9 @@ aparte: usa el fondo y los colores por defecto, no dibuja marcos y no muestra
 pantallas de bienvenida. Al ejecutar `ppr archivo.md`, el archivo se abre
 directamente.
 
-> Estado: Fase 5 completada. Ya se puede editar y guardar, leer el documento
-> con el Markdown renderizado, deshacer y rehacer los cambios, y ajustar las
-> líneas del modo Fuente al ancho de la terminal.
+> Estado: Fase 6 completada. Ya se puede editar y guardar, leer el documento
+> con el Markdown renderizado, deshacer y rehacer los cambios, ajustar las
+> líneas al ancho de la terminal y buscar texto dentro del documento.
 
 ## Requisitos
 
@@ -53,6 +57,8 @@ Escribe la ruta y pulsa `Enter` para guardar, o `Esc` para cancelar.
 | `Tab` | Insertar dos espacios |
 | `Ctrl+Z` | Deshacer |
 | `Ctrl+Y` / `Ctrl+Shift+Z` | Rehacer |
+| `Ctrl+F` | Buscar texto |
+| `F3` / `Shift+F3` | Ir a la coincidencia siguiente o anterior |
 | `Ctrl+V` | Alternar entre Fuente y Vista |
 | `Esc` | Volver de Vista a Fuente |
 | `Ctrl+S` | Guardar |
@@ -77,6 +83,19 @@ filas sin modificar el archivo. Las flechas verticales y `Re Pág`/`Av Pág`
 recorren esas filas y conservan la columna visual al pasar de una a otra.
 `Inicio` y `Fin` siguen yendo al principio y al final de la línea lógica. En el
 modo Vista el texto también se ajusta, pero allí solo se desplaza la lectura.
+
+## Búsqueda
+
+`Ctrl+F` abre el indicador de búsqueda en la línea inferior y salta a la primera
+coincidencia mientras escribes, sin distinguir mayúsculas. `Enter` avanza a la
+siguiente, `Shift+Enter` vuelve a la anterior y la coincidencia actual se
+resalta en el texto. `Esc` cierra la búsqueda y deja el cursor en la
+coincidencia encontrada.
+
+Después de cerrar la búsqueda, `F3` repite la última búsqueda desde el cursor y
+`Shift+F3` busca hacia atrás. Si no hay coincidencias, la línea inferior lo
+indica. Si estabas en el modo Vista, `Ctrl+F` vuelve a Fuente para poder
+recorrer las coincidencias.
 
 ## Barra de estado
 

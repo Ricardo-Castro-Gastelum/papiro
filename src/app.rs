@@ -22,6 +22,11 @@ pub struct App {
     message: Option<String>,
     last_save_name: String,
     view: Option<View>,
+    /// Búsqueda incremental activa mientras el indicador inferior está
+    /// abierto.
+    search: Option<Search>,
+    /// Último texto buscado, para repetir la búsqueda con `F3`.
+    last_search: String,
     /// Esperando confirmación para salir con cambios sin guardar.
     confirm_quit: bool,
 }
@@ -37,10 +42,36 @@ struct View {
     viewport_height: usize,
 }
 
-/// Nombre de archivo que se pide en la línea inferior cuando el búfer no
-/// tiene ruta.
+/// Motivo de la línea de entrada inferior.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    SaveAs,
+    Search,
+}
+
+/// Texto que se está escribiendo en la línea inferior.
 struct Prompt {
+    kind: PromptKind,
     input: String,
+}
+
+/// Coincidencia dentro de una línea lógica, en índices de grafemas.
+#[derive(Clone, Copy)]
+struct SearchMatch {
+    line: usize,
+    start: usize,
+    end: usize,
+}
+
+/// Estado de la búsqueda incremental. El origen fijo permite que, al seguir
+/// escribiendo, la primera coincidencia se busque siempre desde el mismo
+/// punto y no desde donde saltó la anterior.
+struct Search {
+    query: String,
+    matches: Vec<SearchMatch>,
+    current: Option<usize>,
+    origin_line: usize,
+    origin_column: usize,
 }
 
 impl App {
@@ -52,6 +83,8 @@ impl App {
             message: None,
             last_save_name: String::new(),
             view: None,
+            search: None,
+            last_search: String::new(),
             confirm_quit: false,
         }
     }
@@ -74,6 +107,35 @@ impl App {
 
     pub fn prompt_input(&self) -> Option<&str> {
         self.prompt.as_ref().map(|prompt| prompt.input.as_str())
+    }
+
+    pub fn prompt_kind(&self) -> Option<PromptKind> {
+        self.prompt.as_ref().map(|prompt| prompt.kind)
+    }
+
+    /// Texto breve con la posición de la coincidencia actual, para mostrarlo
+    /// junto al indicador de búsqueda.
+    pub fn search_status(&self) -> Option<String> {
+        let search = self.search.as_ref()?;
+
+        if search.query.is_empty() {
+            return None;
+        }
+
+        if search.matches.is_empty() {
+            return Some("sin coincidencias".to_owned());
+        }
+
+        let current = search.current.map_or(0, |index| index + 1);
+        Some(format!("{current}/{}", search.matches.len()))
+    }
+
+    /// Coincidencia que debe resaltarse en el modo Fuente.
+    pub fn current_match(&self) -> Option<(usize, usize, usize)> {
+        let search = self.search.as_ref()?;
+        let found = search.matches.get(search.current?)?;
+
+        Some((found.line, found.start, found.end))
     }
 
     pub fn message(&self) -> Option<&str> {
@@ -179,6 +241,17 @@ impl App {
             return;
         }
 
+        if is_search(&key) {
+            self.begin_search();
+            return;
+        }
+
+        if is_search_next(&key) {
+            let forward = !key.modifiers.contains(KeyModifiers::SHIFT);
+            self.repeat_search(forward);
+            return;
+        }
+
         if is_view_toggle(&key) {
             self.toggle_view();
             return;
@@ -260,6 +333,14 @@ impl App {
     }
 
     fn handle_prompt_key(&mut self, key: KeyEvent) {
+        match self.prompt_kind() {
+            Some(PromptKind::SaveAs) => self.handle_save_prompt_key(key),
+            Some(PromptKind::Search) => self.handle_search_prompt_key(key),
+            None => {}
+        }
+    }
+
+    fn handle_save_prompt_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Enter => self.confirm_save_as(),
             KeyCode::Esc => self.prompt = None,
@@ -277,11 +358,180 @@ impl App {
         }
     }
 
+    fn handle_search_prompt_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.step_search(false)
+            }
+            KeyCode::Enter => self.step_search(true),
+            KeyCode::Esc => self.close_search(),
+            KeyCode::Backspace => {
+                if let Some(prompt) = &mut self.prompt {
+                    remove_last_grapheme(&mut prompt.input);
+                }
+                self.refresh_search();
+            }
+            KeyCode::Char(character) if is_text_input(&key) && !character.is_control() => {
+                if let Some(prompt) = &mut self.prompt {
+                    prompt.input.push(character);
+                }
+                self.refresh_search();
+            }
+            _ => {}
+        }
+    }
+
+    /// Abre la búsqueda desde el cursor. Si se estaba en Vista, vuelve a
+    /// Fuente para poder saltar entre coincidencias.
+    fn begin_search(&mut self) {
+        if self.view.is_some() {
+            self.toggle_view();
+        }
+
+        let origin_line = self.editor.cursor_line();
+        let origin_column = self.editor.cursor_column();
+
+        self.search = Some(Search {
+            query: String::new(),
+            matches: Vec::new(),
+            current: None,
+            origin_line,
+            origin_column,
+        });
+        self.prompt = Some(Prompt {
+            kind: PromptKind::Search,
+            input: String::new(),
+        });
+        self.message = None;
+    }
+
+    /// Recalcula las coincidencias al cambiar el texto buscado y salta a la
+    /// primera que aparece desde el origen de la búsqueda.
+    fn refresh_search(&mut self) {
+        let Some(input) = self.prompt.as_ref().map(|prompt| prompt.input.clone()) else {
+            return;
+        };
+        let Some(search) = self.search.as_ref() else {
+            return;
+        };
+        let origin_line = search.origin_line;
+        let origin_column = search.origin_column;
+        let matches = find_matches(self.editor.lines(), &input);
+
+        let current = if input.is_empty() {
+            None
+        } else {
+            matches
+                .iter()
+                .position(|candidate| {
+                    candidate.line > origin_line
+                        || (candidate.line == origin_line && candidate.start >= origin_column)
+                })
+                .or_else(|| (!matches.is_empty()).then_some(0))
+        };
+
+        if let Some(search) = self.search.as_mut() {
+            search.query = input;
+            search.matches = matches;
+            search.current = current;
+        }
+
+        self.jump_to_current_match();
+    }
+
+    fn step_search(&mut self, forward: bool) {
+        let Some(search) = self.search.as_ref() else {
+            return;
+        };
+        if search.matches.is_empty() {
+            return;
+        }
+
+        let total = search.matches.len();
+        let next = match (search.current, forward) {
+            (Some(index), true) => (index + 1) % total,
+            (Some(index), false) => (index + total - 1) % total,
+            (None, true) => 0,
+            (None, false) => total - 1,
+        };
+
+        if let Some(search) = self.search.as_mut() {
+            search.current = Some(next);
+        }
+        self.jump_to_current_match();
+    }
+
+    fn jump_to_current_match(&mut self) {
+        let Some(search) = self.search.as_ref() else {
+            return;
+        };
+        let Some(index) = search.current else {
+            return;
+        };
+        let Some(found) = search.matches.get(index) else {
+            return;
+        };
+        let (line, start) = (found.line, found.start);
+
+        self.editor.set_cursor(line, start);
+    }
+
+    fn close_search(&mut self) {
+        if let Some(search) = self.search.take()
+            && !search.query.is_empty()
+        {
+            self.last_search = search.query;
+        }
+        self.prompt = None;
+    }
+
+    /// Repite la última búsqueda desde el cursor con `F3` o `Shift+F3`.
+    fn repeat_search(&mut self, forward: bool) {
+        if self.last_search.is_empty() || self.prompt.is_some() {
+            return;
+        }
+
+        if self.view.is_some() {
+            self.toggle_view();
+        }
+
+        let line = self.editor.cursor_line();
+        let column = self.editor.cursor_column();
+        let query = self.last_search.clone();
+        let matches = find_matches(self.editor.lines(), &query);
+
+        if matches.is_empty() {
+            self.message = Some(format!("Sin coincidencias para «{query}»."));
+            return;
+        }
+
+        let target = if forward {
+            matches
+                .iter()
+                .position(|candidate| {
+                    candidate.line > line || (candidate.line == line && candidate.start > column)
+                })
+                .unwrap_or(0)
+        } else {
+            matches
+                .iter()
+                .rposition(|candidate| {
+                    candidate.line < line || (candidate.line == line && candidate.start < column)
+                })
+                .unwrap_or(matches.len() - 1)
+        };
+
+        let found = matches[target];
+        self.editor.set_cursor(found.line, found.start);
+        self.message = Some(format!("Coincidencia {} de {}", target + 1, matches.len()));
+    }
+
     fn begin_save(&mut self) {
         if let Some(path) = self.editor.path().map(Path::to_path_buf) {
             self.save_to(&path);
         } else {
             self.prompt = Some(Prompt {
+                kind: PromptKind::SaveAs,
                 input: std::mem::take(&mut self.last_save_name),
             });
         }
@@ -335,6 +585,59 @@ fn is_view_toggle(key: &KeyEvent) -> bool {
         || matches!(key.code, KeyCode::Char('\u{16}'))
 }
 
+fn is_search(key: &KeyEvent) -> bool {
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+
+    (control && matches!(key.code, KeyCode::Char('f' | 'F')))
+        || matches!(key.code, KeyCode::Char('\u{06}'))
+}
+
+fn is_search_next(key: &KeyEvent) -> bool {
+    matches!(key.code, KeyCode::F(3))
+}
+
+/// Busca `query` en cada línea sin distinguir mayúsculas. La comparación se
+/// hace por grafemas para que los acentos y emojis no desalineen los índices.
+fn find_matches(lines: &[String], query: &str) -> Vec<SearchMatch> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let needle = lowercase_graphemes(query);
+    if needle.is_empty() {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+
+    for (line_index, line) in lines.iter().enumerate() {
+        let haystack = lowercase_graphemes(line);
+        if haystack.len() < needle.len() {
+            continue;
+        }
+
+        let mut start = 0;
+        while start + needle.len() <= haystack.len() {
+            if haystack[start..].starts_with(&needle) {
+                matches.push(SearchMatch {
+                    line: line_index,
+                    start,
+                    end: start + needle.len(),
+                });
+                start += needle.len();
+            } else {
+                start += 1;
+            }
+        }
+    }
+
+    matches
+}
+
+fn lowercase_graphemes(text: &str) -> Vec<String> {
+    text.graphemes(true).map(str::to_lowercase).collect()
+}
+
 fn is_undo(key: &KeyEvent) -> bool {
     let control = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -377,7 +680,7 @@ mod tests {
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    use super::App;
+    use super::{App, PromptKind, find_matches};
     use crate::editor::Editor;
 
     #[test]
@@ -567,5 +870,114 @@ mod tests {
 
         assert!(app.is_view_mode());
         assert_eq!(app.editor.content(), "!hola");
+    }
+
+    #[test]
+    fn busca_y_salta_entre_coincidencias() {
+        let mut app = App::new(Editor::from_text("uno dos uno dos", None));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert!(matches!(app.prompt_kind(), Some(PromptKind::Search)));
+
+        for character in "dos".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+
+        assert_eq!(app.editor.cursor_column(), 4);
+        assert_eq!(app.search_status().as_deref(), Some("1/2"));
+        assert_eq!(app.current_match(), Some((0, 4, 7)));
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.editor.cursor_column(), 12);
+        assert_eq!(app.search_status().as_deref(), Some("2/2"));
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.editor.cursor_column(), 4);
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        assert_eq!(app.editor.cursor_column(), 12);
+        assert_eq!(app.search_status().as_deref(), Some("2/2"));
+
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.editor.cursor_column(), 4);
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.prompt_kind().is_none());
+        assert_eq!(app.current_match(), None);
+        assert_eq!(app.editor.cursor_column(), 4);
+    }
+
+    #[test]
+    fn f3_repite_la_ultima_busqueda() {
+        let mut app = App::new(Editor::from_text("uno dos uno dos", None));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        for character in "dos".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.editor.cursor_column(), 4);
+
+        app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
+        assert_eq!(app.editor.cursor_column(), 12);
+        assert_eq!(app.message(), Some("Coincidencia 2 de 2"));
+
+        app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::SHIFT));
+        assert_eq!(app.editor.cursor_column(), 4);
+    }
+
+    #[test]
+    fn buscar_desde_vista_vuelve_a_fuente() {
+        let mut app = App::new(Editor::from_text("# Título", None));
+        app.toggle_view();
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+
+        assert!(!app.is_view_mode());
+        assert!(matches!(app.prompt_kind(), Some(PromptKind::Search)));
+    }
+
+    #[test]
+    fn avisa_cuando_la_busqueda_no_encuentra_nada() {
+        let mut app = App::new(Editor::from_text("hola", None));
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        for character in "zzz".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+
+        assert_eq!(app.search_status().as_deref(), Some("sin coincidencias"));
+        assert_eq!(app.current_match(), None);
+    }
+
+    #[test]
+    fn encuentra_coincidencias_sin_distinguir_mayusculas() {
+        let lines = vec!["Hola Mundo".to_owned(), "mundo mundo".to_owned()];
+
+        let matches = find_matches(&lines, "mundo");
+
+        assert_eq!(matches.len(), 3);
+        assert_eq!(
+            (matches[0].line, matches[0].start, matches[0].end),
+            (0, 5, 10)
+        );
+        assert_eq!(
+            (matches[1].line, matches[1].start, matches[1].end),
+            (1, 0, 5)
+        );
+        assert_eq!(
+            (matches[2].line, matches[2].start, matches[2].end),
+            (1, 6, 11)
+        );
+    }
+
+    #[test]
+    fn busca_acentos_por_grafemas() {
+        let lines = vec!["El año pasado".to_owned()];
+
+        let matches = find_matches(&lines, "AÑO");
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!((matches[0].start, matches[0].end), (3, 6));
     }
 }

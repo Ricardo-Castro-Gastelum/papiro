@@ -7,17 +7,17 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::App;
+use crate::app::{App, PromptKind};
 use crate::editor::{Editor, VisualRow, display_range};
 
-const SAVE_HINT: &str =
-    "Ctrl+S · guardar   Ctrl+V · vista   Ctrl+Z · deshacer   Ctrl+Y · rehacer   Ctrl+Q · salir ";
-const VIEW_HINT: &str = "Ctrl+V · editar   Ctrl+Q · salir ";
-const COMPACT_SAVE_HINT: &str = "^S guardar ^V vista ^Z deshacer ^Y rehacer ^Q salir ";
-const COMPACT_VIEW_HINT: &str = "^V editar ^Q salir ";
-const MINIMAL_SAVE_HINT: &str = "^S ^V ^Z ^Y ^Q ";
-const MINIMAL_VIEW_HINT: &str = "^V ^Q ";
+const SAVE_HINT: &str = "Ctrl+S · guardar   Ctrl+V · vista   Ctrl+F · buscar   Ctrl+Z · deshacer   Ctrl+Y · rehacer   Ctrl+Q · salir ";
+const VIEW_HINT: &str = "Ctrl+V · editar   Ctrl+F · buscar   Ctrl+Q · salir ";
+const COMPACT_SAVE_HINT: &str = "^S guardar ^V vista ^F buscar ^Z deshacer ^Y rehacer ^Q salir ";
+const COMPACT_VIEW_HINT: &str = "^V editar ^F buscar ^Q salir ";
+const MINIMAL_SAVE_HINT: &str = "^S ^V ^F ^Z ^Y ^Q ";
+const MINIMAL_VIEW_HINT: &str = "^V ^F ^Q ";
 const PROMPT_LABEL: &str = " Guardar como: ";
+const SEARCH_LABEL: &str = " Buscar: ";
 
 /// Área de texto más una línea discreta para el nombre del archivo, los
 /// atajos o el nombre que se esté escribiendo. No hay bordes ni fondo propio:
@@ -42,7 +42,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_footer(frame, footer_area, app);
 
     if let Some(input) = app.prompt_input() {
-        if let Some(position) = prompt_cursor(footer_area, input) {
+        let label = prompt_label(app.prompt_kind());
+        if let Some(position) = prompt_cursor(footer_area, label, input) {
             frame.set_cursor_position(position);
         }
     } else if let Some(rows) = &source_rows
@@ -58,13 +59,38 @@ fn draw_source(frame: &mut Frame, area: Rect, app: &App, rows: &[VisualRow]) {
 
     let lines = rows[start..end]
         .iter()
-        .map(|row| {
-            let line = &app.editor.lines()[row.line];
-            Line::raw(display_range(line, row.start, row.end))
-        })
+        .map(|row| source_row(app, row))
         .collect::<Vec<_>>();
 
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Dibuja una fila visual resaltando la coincidencia de búsqueda actual si
+/// cae dentro de ella.
+fn source_row(app: &App, row: &VisualRow) -> Line<'static> {
+    let line = &app.editor.lines()[row.line];
+    let Some((match_line, match_start, match_end)) = app.current_match() else {
+        return Line::raw(display_range(line, row.start, row.end));
+    };
+
+    let start = match_start.max(row.start);
+    let end = match_end.min(row.end);
+    if match_line != row.line || start >= end {
+        return Line::raw(display_range(line, row.start, row.end));
+    }
+
+    let highlight = Style::default().add_modifier(Modifier::REVERSED);
+    let mut spans = Vec::new();
+
+    if start > row.start {
+        spans.push(Span::raw(display_range(line, row.start, start)));
+    }
+    spans.push(Span::styled(display_range(line, start, end), highlight));
+    if end < row.end {
+        spans.push(Span::raw(display_range(line, end, row.end)));
+    }
+
+    Line::from(spans)
 }
 
 /// Dibuja solo las líneas visibles del documento renderizado. El ajuste de
@@ -105,11 +131,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(blank), area);
 
     if let Some(input) = app.prompt_input() {
-        let line = Line::from(vec![
-            Span::styled(PROMPT_LABEL, dim),
-            Span::raw(safe_text(input)),
-        ]);
-        frame.render_widget(Paragraph::new(line), area);
+        let label = prompt_label(app.prompt_kind());
+        let mut spans = vec![Span::styled(label, dim), Span::raw(safe_text(input))];
+
+        if let Some(status) = app.search_status() {
+            spans.push(Span::styled(format!("   {status}"), dim));
+        }
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
 
@@ -188,12 +217,19 @@ fn fits(text: &str, name_width: u16, width: u16) -> bool {
     text_width.saturating_add(1).saturating_add(name_width) <= width
 }
 
-fn prompt_cursor(area: Rect, input: &str) -> Option<(u16, u16)> {
+fn prompt_label(kind: Option<PromptKind>) -> &'static str {
+    match kind {
+        Some(PromptKind::Search) => SEARCH_LABEL,
+        _ => PROMPT_LABEL,
+    }
+}
+
+fn prompt_cursor(area: Rect, label: &str, input: &str) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
         return None;
     }
 
-    let offset = UnicodeWidthStr::width(PROMPT_LABEL) + UnicodeWidthStr::width(input);
+    let offset = UnicodeWidthStr::width(label) + UnicodeWidthStr::width(input);
     let offset = u16::try_from(offset).unwrap_or(u16::MAX);
     let last_column = area.width.saturating_sub(1);
 
