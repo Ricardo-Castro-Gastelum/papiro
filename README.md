@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/PapiroMd.png" alt="Papiro" width="320">
+  <img src="assets/PapiroMd.png" alt="Papiro" width="220">
 </p>
 
 # Papiro
