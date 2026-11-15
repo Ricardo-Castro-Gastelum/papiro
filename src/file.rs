@@ -1,16 +1,11 @@
-//! Lectura, normalización y guardado atómico de archivos.
-
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 
-/// Marca de orden de bytes al inicio de algunos archivos UTF-8.
 const BOM: &[u8] = b"\xEF\xBB\xBF";
 
-/// Lee un archivo de texto. Devuelve `None` si no existe, para que el editor
-/// pueda abrir un búfer vacío asociado a esa ruta.
 pub fn read_file(path: &Path) -> Result<Option<String>> {
     let mut bytes = match fs::read(path) {
         Ok(bytes) => bytes,
@@ -35,8 +30,6 @@ pub fn read_file(path: &Path) -> Result<Option<String>> {
     Ok(Some(normalize_newlines(&text)))
 }
 
-/// Guarda el contenido mediante un archivo temporal en el mismo directorio y
-/// un renombrado final. Así un fallo a mitad de escritura no daña el original.
 pub fn save_file(path: &Path, contents: &str) -> Result<()> {
     let parent = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
@@ -50,8 +43,6 @@ pub fn save_file(path: &Path, contents: &str) -> Result<()> {
     let mut builder = tempfile::Builder::new();
     builder.prefix(".ppr-");
 
-    // Un archivo nuevo debe respetar el umask habitual del sistema. Si ya
-    // existe, después se copian sus permisos exactos.
     #[cfg(unix)]
     if existing_permissions.is_none() {
         use std::os::unix::fs::PermissionsExt;
@@ -96,8 +87,6 @@ pub fn save_file(path: &Path, contents: &str) -> Result<()> {
         .map_err(|error| error.error)
         .with_context(|| format!("No se pudo guardar «{}»", path.display()))?;
 
-    // Sincronizar el directorio hace que el renombrado sea durable tras un
-    // corte de energía. Es un extra: si falla, el archivo ya está guardado.
     if let Ok(directory) = fs::File::open(parent) {
         let _ = directory.sync_all();
     }
@@ -105,8 +94,6 @@ pub fn save_file(path: &Path, contents: &str) -> Result<()> {
     Ok(())
 }
 
-/// Unifica los finales de línea a LF para que el editor tenga un solo formato
-/// interno. El guardado escribirá LF.
 fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }

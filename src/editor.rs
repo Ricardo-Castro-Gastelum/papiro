@@ -1,5 +1,3 @@
-//! Estado del texto, edición, cursor, deshacer/rehacer y ajuste de líneas.
-
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
@@ -9,22 +7,12 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::file;
 
-/// Ancho de un tabulador al mostrarlo. La tecla Tab inserta dos espacios, pero
-/// los tabuladores que ya existan en un archivo se alinean a paradas de cuatro
-/// columnas.
 pub const TAB_DISPLAY_WIDTH: usize = 4;
 
-/// Número máximo de estados que se conservan para deshacer.
 const MAX_UNDO: usize = 200;
 
-/// Cada línea se guarda como una cadena UTF-8. El cursor se expresa en
-/// índices de grafemas, no de bytes, para que los acentos y los emojis
-/// compuestos se traten como una sola unidad.
 type Line = String;
 
-/// Una fila visual del modo Fuente. Una línea lógica puede ocupar varias filas
-/// cuando no cabe en el ancho de la terminal. `start` y `end` son índices de
-/// grafemas dentro de esa línea.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VisualRow {
     pub line: usize,
@@ -32,8 +20,6 @@ pub struct VisualRow {
     pub end: usize,
 }
 
-/// Tipo de edición. El tecleo y los borrados seguidos se agrupan en un solo
-/// paso de deshacer.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditKind {
     Typing,
@@ -41,8 +27,6 @@ enum EditKind {
     Delete,
 }
 
-/// Estado completo del búfer en un momento dado. Se guarda antes de cada
-/// edición para poder restaurarlo después.
 #[derive(Clone)]
 struct Snapshot {
     lines: Vec<Line>,
@@ -58,22 +42,14 @@ pub struct Editor {
     scroll_row: usize,
     viewport_width: usize,
     viewport_height: usize,
-    /// Cambios pendientes desde la última carga o guardado.
     modified: bool,
-    /// Copia del texto tal como está en disco. Sirve para saber si deshacer
-    /// volvió exactamente al estado guardado.
     saved: Vec<Line>,
     undo: VecDeque<Snapshot>,
     redo: VecDeque<Snapshot>,
-    /// Tipo de edición de la racha actual. Mientras no se mueva el cursor ni
-    /// se guarde, las pulsaciones del mismo tipo comparten un paso de
-    /// deshacer.
     coalesce: Option<EditKind>,
 }
 
 impl Editor {
-    /// Crea un búfer vacío o carga el archivo indicado. Si la ruta no existe,
-    /// el búfer queda asociado a ella y se creará al guardar.
     pub fn open(path: Option<PathBuf>) -> Result<Self> {
         let Some(path) = path else {
             return Ok(Self::from_text("", None));
@@ -114,13 +90,10 @@ impl Editor {
         self.path = Some(path);
     }
 
-    /// Texto completo tal como se guardará en disco.
     pub fn content(&self) -> String {
         self.lines.join("\n")
     }
 
-    /// Nombre breve para la barra inferior. Si no hay ruta, se muestra un
-    /// texto genérico en lugar de inventar un nombre de archivo.
     pub fn display_name(&self) -> String {
         match &self.path {
             Some(path) => match path.file_name() {
@@ -139,8 +112,6 @@ impl Editor {
         self.cursor_column
     }
 
-    /// Coloca el cursor en una posición concreta. Se usa al saltar a una
-    /// coincidencia de búsqueda; si la línea no existe, no hace nada.
     pub fn set_cursor(&mut self, line: usize, column: usize) {
         if line >= self.lines.len() {
             return;
@@ -151,12 +122,10 @@ impl Editor {
         self.coalesce = None;
     }
 
-    /// Indica si hay cambios pendientes de guardar.
     pub fn is_modified(&self) -> bool {
         self.modified
     }
 
-    /// Marca el contenido actual como guardado.
     pub fn mark_saved(&mut self) {
         self.modified = false;
         self.saved.clone_from(&self.lines);
@@ -167,24 +136,18 @@ impl Editor {
         self.scroll_row
     }
 
-    /// Columna visual del cursor, contando tabuladores y caracteres de doble
-    /// ancho. Es distinta de `cursor_column`, que cuenta grafemas.
     pub fn cursor_cell(&self) -> usize {
         cell_width(&self.lines[self.cursor_line], self.cursor_column)
     }
 
-    /// Filas visuales con el ajuste de líneas del ancho actual. El resultado
-    /// siempre tiene al menos una fila por cada línea lógica.
     pub fn rows(&self) -> Vec<VisualRow> {
         wrap_rows(&self.lines, self.wrap_width())
     }
 
-    /// Fila visual que ocupa el cursor dentro del ajuste actual.
     pub fn cursor_row(&self, rows: &[VisualRow]) -> usize {
         row_index(rows, self.cursor_line, self.cursor_column)
     }
 
-    /// Columna del cursor dentro de su fila visual.
     pub fn cursor_row_cell(&self, rows: &[VisualRow]) -> usize {
         let Some(row) = rows.get(self.cursor_row(rows)) else {
             return self.cursor_cell();
@@ -194,8 +157,6 @@ impl Editor {
             .saturating_sub(cell_width(&self.lines[row.line], row.start))
     }
 
-    /// Corta la agrupación de deshacer. Se usa al cambiar de modo para que el
-    /// tecleo anterior no se mezcle con el siguiente.
     pub fn break_undo_group(&mut self) {
         self.coalesce = None;
     }
@@ -242,8 +203,6 @@ impl Editor {
         self.coalesce = None;
     }
 
-    /// Avanza hasta el comienzo de la palabra siguiente. Los signos de
-    /// puntuación y los espacios se saltan como separadores.
     pub fn move_word_right(&mut self) {
         let graphemes = graphemes(&self.lines[self.cursor_line]);
         let mut index = self.cursor_column;
@@ -259,7 +218,6 @@ impl Editor {
         self.coalesce = None;
     }
 
-    /// Retrocede hasta el comienzo de la palabra anterior.
     pub fn move_word_left(&mut self) {
         let graphemes = graphemes(&self.lines[self.cursor_line]);
         let mut index = self.cursor_column;
@@ -298,8 +256,6 @@ impl Editor {
         self.viewport_height.saturating_sub(1).max(1)
     }
 
-    /// Mueve el cursor a otra fila visual conservando, en lo posible, la
-    /// columna que ocupaba en la fila anterior.
     fn move_to_row(&mut self, rows: &[VisualRow], target: usize) {
         let current = self.cursor_row(rows);
         let (Some(current_row), Some(row)) = (rows.get(current), rows.get(target)) else {
@@ -314,8 +270,6 @@ impl Editor {
         self.cursor_column = column_at_cell(&self.lines[row.line], row.start, row.end, desired);
     }
 
-    /// Inserta un solo carácter en la posición del cursor. Los caracteres de
-    /// control se ignoran: nunca deben llegar al búfer desde las teclas.
     pub fn insert_char(&mut self, character: char) {
         if character == '\n' {
             self.insert_newline();
@@ -328,7 +282,6 @@ impl Editor {
         self.split_line();
     }
 
-    /// Tab inserta dos espacios, como pide la interfaz.
     pub fn insert_tab(&mut self) {
         self.insert_in_line("  ");
     }
@@ -367,8 +320,6 @@ impl Editor {
         self.modified = true;
     }
 
-    /// Borra el grafema anterior. Al principio de una línea, une esa línea con
-    /// la anterior.
     pub fn backspace(&mut self) {
         if self.cursor_column > 0 {
             self.begin_edit(Some(EditKind::Backspace));
@@ -397,8 +348,6 @@ impl Editor {
         }
     }
 
-    /// Borra el grafema bajo el cursor. Al final de una línea, une la
-    /// siguiente con la actual.
     pub fn delete(&mut self) {
         if self.cursor_column < grapheme_count(&self.lines[self.cursor_line]) {
             self.begin_edit(Some(EditKind::Delete));
@@ -417,7 +366,6 @@ impl Editor {
         }
     }
 
-    /// Deshace la última edición o racha de ediciones.
     pub fn undo(&mut self) {
         let Some(snapshot) = self.undo.pop_back() else {
             return;
@@ -429,7 +377,6 @@ impl Editor {
         self.modified = self.lines != self.saved;
     }
 
-    /// Rehace la última edición deshecha.
     pub fn redo(&mut self) {
         let Some(snapshot) = self.redo.pop_back() else {
             return;
@@ -444,8 +391,6 @@ impl Editor {
         self.modified = self.lines != self.saved;
     }
 
-    /// Guarda el estado actual antes de una edición. Si la edición continúa
-    /// una racha del mismo tipo, no se duplica el punto de deshacer.
     fn begin_edit(&mut self, kind: Option<EditKind>) {
         let merge = kind.is_some() && self.coalesce == kind;
 
@@ -474,8 +419,6 @@ impl Editor {
         self.cursor_column = snapshot.cursor_column;
     }
 
-    /// Ancho con el que se ajustan las líneas. Antes del primer fotograma no
-    /// se conoce el ancho de la terminal y se muestra una fila por línea.
     fn wrap_width(&self) -> usize {
         if self.viewport_width == 0 {
             usize::MAX
@@ -484,8 +427,6 @@ impl Editor {
         }
     }
 
-    /// Ajusta el desplazamiento para que el cursor quede dentro del área de
-    /// texto. Se llama en cada fotograma, después de conocer el tamaño real.
     pub fn ensure_visible(&mut self, width: usize, height: usize) {
         self.viewport_width = width;
         self.viewport_height = height;
@@ -507,9 +448,6 @@ impl Editor {
     }
 }
 
-/// Divide las líneas lógicas en filas visuales que caben en `width` columnas.
-/// Los caracteres de doble ancho que no caben al final de una fila pasan
-/// enteros a la siguiente para no partirlos.
 fn wrap_rows(lines: &[Line], width: usize) -> Vec<VisualRow> {
     let width = width.max(1);
     let mut rows = Vec::new();
@@ -549,9 +487,6 @@ fn wrap_rows(lines: &[Line], width: usize) -> Vec<VisualRow> {
             end: graphemes.len(),
         });
 
-        // Si la línea ocupa el ancho exacto, el cursor al final necesita una
-        // fila más donde dibujarse; de lo contrario quedaría fuera de la
-        // pantalla.
         if cell > 0 && cell % width == 0 {
             rows.push(VisualRow {
                 line: line_index,
@@ -564,9 +499,6 @@ fn wrap_rows(lines: &[Line], width: usize) -> Vec<VisualRow> {
     rows
 }
 
-/// Índice de la fila visual que contiene la columna indicada. Si la columna
-/// está justo en un corte, se elige la fila siguiente, que es donde debe
-/// dibujarse el cursor.
 fn row_index(rows: &[VisualRow], line: usize, column: usize) -> usize {
     let mut fallback = None;
 
@@ -584,8 +516,6 @@ fn row_index(rows: &[VisualRow], line: usize, column: usize) -> usize {
     fallback.unwrap_or(0)
 }
 
-/// Índice de grafema más cercano a `offset` columnas desde el comienzo de la
-/// fila. Si el desplazamiento supera el ancho de la fila, devuelve su final.
 fn column_at_cell(line: &str, start: usize, end: usize, offset: usize) -> usize {
     let graphemes = graphemes(line);
     let start_cell = cell_width(line, start);
@@ -609,8 +539,6 @@ fn graphemes(text: &str) -> Vec<&str> {
     text.graphemes(true).collect()
 }
 
-/// Un grafema se considera parte de una palabra si empieza por una letra, un
-/// número o un guion bajo. Los emojis y la puntuación actúan como separadores.
 fn is_word_grapheme(grapheme: &str) -> bool {
     grapheme
         .chars()
@@ -618,17 +546,12 @@ fn is_word_grapheme(grapheme: &str) -> bool {
         .is_some_and(|character| character.is_alphanumeric() || character == '_')
 }
 
-/// Desplazamiento en bytes del grafema indicado. Si el índice está al final,
-/// devuelve la longitud de la cadena.
 fn grapheme_offset(text: &str, index: usize) -> usize {
     text.grapheme_indices(true)
         .nth(index)
         .map_or(text.len(), |(offset, _)| offset)
 }
 
-/// Calcula la anchura visual de los primeros `limit` grafemas. Los tabuladores
-/// avanzan hasta la siguiente parada y los caracteres de control se sustituyen
-/// por un símbolo visible de una columna.
 fn cell_width(text: &str, limit: usize) -> usize {
     text.graphemes(true)
         .take(limit)
@@ -647,13 +570,6 @@ fn grapheme_width(grapheme: &str, column: usize) -> usize {
     }
 }
 
-/// Convierte una línea interna en el texto que se dibuja, o solo el fragmento
-/// de `start..end` cuando la línea está ajustada. Los tabuladores se expanden
-/// con paradas fijas y los caracteres de control no llegan nunca a la
-/// terminal: se muestran como `�` para evitar secuencias de escape ajenas.
-///
-/// Los tabuladores se alinean según su columna real dentro de la línea, no
-/// dentro del fragmento, para que el ajuste no rompa la sangría.
 pub fn display_range(line: &str, start: usize, end: usize) -> String {
     let mut rendered = String::new();
     let mut column = 0;
@@ -891,7 +807,6 @@ mod tests {
         editor.move_end();
         assert!(!editor.is_modified());
 
-        // Al final de la única línea, Suprimir no borra nada.
         editor.delete();
         assert!(!editor.is_modified());
 
@@ -1056,8 +971,6 @@ mod tests {
         assert_eq!(editor.cursor_line(), 0);
         assert_eq!(editor.cursor_column(), 4);
 
-        // La línea ocupa el ancho exacto, así que el final del texto tiene su
-        // propia fila visual.
         editor.move_down();
         assert_eq!(editor.cursor_column(), 8);
 

@@ -1,5 +1,3 @@
-//! Dibujo del modo Fuente, el indicador de nombre y la línea inferior.
-
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -19,9 +17,6 @@ const MINIMAL_VIEW_HINT: &str = "^V ^F ^Q ";
 const PROMPT_LABEL: &str = " Guardar como: ";
 const SEARCH_LABEL: &str = " Buscar: ";
 
-/// Área de texto más una línea discreta para el nombre del archivo, los
-/// atajos o el nombre que se esté escribiendo. No hay bordes ni fondo propio:
-/// todo hereda los colores de la terminal.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let [text_area, footer_area] =
@@ -65,8 +60,6 @@ fn draw_source(frame: &mut Frame, area: Rect, app: &App, rows: &[VisualRow]) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// Dibuja una fila visual resaltando la coincidencia de búsqueda actual si
-/// cae dentro de ella.
 fn source_row(app: &App, row: &VisualRow) -> Line<'static> {
     let line = &app.editor.lines()[row.line];
     let Some((match_line, match_start, match_end)) = app.current_match() else {
@@ -93,9 +86,6 @@ fn source_row(app: &App, row: &VisualRow) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Dibuja solo las líneas visibles del documento renderizado. El ajuste de
-/// líneas ya se hizo al analizar el Markdown, así que el desplazamiento es
-/// una simple rebanada.
 fn draw_view(frame: &mut Frame, area: Rect, app: &App) {
     let lines = app.view_lines();
     let start = app.view_scroll().min(lines.len());
@@ -105,8 +95,6 @@ fn draw_view(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(Paragraph::new(visible), area);
 }
 
-/// Posición del cursor en coordenadas de pantalla, si queda dentro del área
-/// visible.
 fn cursor_position(editor: &Editor, rows: &[VisualRow], area: Rect) -> Option<(u16, u16)> {
     let row = u16::try_from(editor.cursor_row(rows).checked_sub(editor.scroll_row())?).ok()?;
     let column = u16::try_from(editor.cursor_row_cell(rows)).ok()?;
@@ -125,8 +113,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
 
     let dim = Style::default().add_modifier(Modifier::DIM);
 
-    // Limpia la línea completa para que no queden restos de la barra anterior
-    // al abrir el indicador de nombre o mostrar un mensaje.
     let blank = " ".repeat(usize::from(area.width));
     frame.render_widget(Paragraph::new(blank), area);
 
@@ -173,8 +159,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         MINIMAL_SAVE_HINT
     };
 
-    // Primero se intenta mostrar la posición del cursor y los atajos
-    // completos; si no caben junto al nombre, se van acortando por orden.
     let position = if app.is_view_mode() {
         String::new()
     } else {
@@ -195,7 +179,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     .find(|hint| fits(hint, name_width, area.width))
     .unwrap_or_else(|| minimal_hint.to_owned());
 
-    // El espacio inicial separa el nombre de los atajos.
     let hints = format!(" {chosen}");
     let hints_width = u16::try_from(UnicodeWidthStr::width(hints.as_str())).unwrap_or(u16::MAX);
     let name_area = Rect {
@@ -210,7 +193,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// Indica si el texto y el nombre caben en la barra con un espacio entre ambos.
 fn fits(text: &str, name_width: u16, width: u16) -> bool {
     let text_width = u16::try_from(UnicodeWidthStr::width(text)).unwrap_or(u16::MAX);
 
@@ -236,9 +218,6 @@ fn prompt_cursor(area: Rect, label: &str, input: &str) -> Option<(u16, u16)> {
     Some((area.x.saturating_add(offset.min(last_column)), area.y))
 }
 
-/// Los nombres de archivo y los mensajes pueden contener caracteres de
-/// control. En la barra inferior se sustituyen para no enviar secuencias de
-/// escape a la terminal.
 fn safe_text(text: &str) -> String {
     text.chars()
         .map(|character| {

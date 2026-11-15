@@ -1,9 +1,3 @@
-//! Papiro: editor y lector de Markdown para la terminal.
-//!
-//! La lectura del archivo ocurre antes de entrar en la pantalla alterna, de
-//! modo que cualquier error se muestra en la terminal normal. Una guardia y un
-//! hook de pánico devuelven la terminal a su estado original al salir.
-
 mod app;
 mod editor;
 mod file;
@@ -47,7 +41,6 @@ Atajos:
 
 Repositorio: https://github.com/Ricardo-Castro-Gastelum/papiro";
 
-/// Lo que hay que hacer según los argumentos de la línea de comandos.
 #[derive(Debug, PartialEq, Eq)]
 enum Action {
     Edit(Option<PathBuf>),
@@ -67,8 +60,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// Ejecuta el programa completo. La terminal solo se inicializa después de
-/// leer el archivo, para no alterar la sesión si la ruta falla.
 fn run() -> Result<()> {
     let path = match parse_args()? {
         Action::Edit(path) => path,
@@ -96,9 +87,6 @@ fn parse_args() -> Result<Action> {
     parse_args_from(env::args_os().skip(1))
 }
 
-/// Acepta como máximo una ruta, además de `--help` y `--version`. Los
-/// argumentos se leen como `OsString` para admitir rutas que no sean UTF-8
-/// válido.
 fn parse_args_from<I>(args: I) -> Result<Action>
 where
     I: IntoIterator<Item = std::ffi::OsString>,
@@ -127,7 +115,6 @@ where
     Ok(Action::Edit(Some(PathBuf::from(first))))
 }
 
-/// Mantiene la terminal en pantalla alterna y modo raw mientras vive.
 struct TerminalSession {
     terminal: Terminal<CrosstermBackend<Stdout>>,
 }
@@ -163,7 +150,6 @@ impl Drop for TerminalSession {
     }
 }
 
-/// Hook de pánico: restaura la terminal antes de que se imprima el mensaje.
 fn install_panic_hook() {
     let default_hook = panic::take_hook();
 
@@ -173,8 +159,6 @@ fn install_panic_hook() {
     }));
 }
 
-/// Restaura la terminal. Es idempotente: puede llamarse desde el hook de
-/// pánico y de nuevo desde `Drop` sin efectos adversos.
 fn restore_terminal() {
     let _ = disable_raw_mode();
     let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);

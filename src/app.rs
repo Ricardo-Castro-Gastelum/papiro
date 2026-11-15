@@ -1,5 +1,3 @@
-//! Estado de la aplicación, edición y bucle de eventos.
-
 use std::io::Stdout;
 use std::path::Path;
 
@@ -22,17 +20,11 @@ pub struct App {
     message: Option<String>,
     last_save_name: String,
     view: Option<View>,
-    /// Búsqueda incremental activa mientras el indicador inferior está
-    /// abierto.
     search: Option<Search>,
-    /// Último texto buscado, para repetir la búsqueda con `F3`.
     last_search: String,
-    /// Esperando confirmación para salir con cambios sin guardar.
     confirm_quit: bool,
 }
 
-/// Contenido ya renderizado del modo Vista. Se guarda para no volver a
-/// analizar el documento en cada fotograma.
 #[derive(Default)]
 struct View {
     lines: Vec<Line<'static>>,
@@ -42,20 +34,17 @@ struct View {
     viewport_height: usize,
 }
 
-/// Motivo de la línea de entrada inferior.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PromptKind {
     SaveAs,
     Search,
 }
 
-/// Texto que se está escribiendo en la línea inferior.
 struct Prompt {
     kind: PromptKind,
     input: String,
 }
 
-/// Coincidencia dentro de una línea lógica, en índices de grafemas.
 #[derive(Clone, Copy)]
 struct SearchMatch {
     line: usize,
@@ -63,9 +52,6 @@ struct SearchMatch {
     end: usize,
 }
 
-/// Estado de la búsqueda incremental. El origen fijo permite que, al seguir
-/// escribiendo, la primera coincidencia se busque siempre desde el mismo
-/// punto y no desde donde saltó la anterior.
 struct Search {
     query: String,
     matches: Vec<SearchMatch>,
@@ -89,8 +75,6 @@ impl App {
         }
     }
 
-    /// Dibuja y espera el siguiente evento. Solo se redibuja cuando llega una
-    /// tecla o cambia el tamaño de la terminal.
     pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         while self.running {
             terminal.draw(|frame| render::draw(frame, self))?;
@@ -113,8 +97,6 @@ impl App {
         self.prompt.as_ref().map(|prompt| prompt.kind)
     }
 
-    /// Texto breve con la posición de la coincidencia actual, para mostrarlo
-    /// junto al indicador de búsqueda.
     pub fn search_status(&self) -> Option<String> {
         let search = self.search.as_ref()?;
 
@@ -130,7 +112,6 @@ impl App {
         Some(format!("{current}/{}", search.matches.len()))
     }
 
-    /// Coincidencia que debe resaltarse en el modo Fuente.
     pub fn current_match(&self) -> Option<(usize, usize, usize)> {
         let search = self.search.as_ref()?;
         let found = search.matches.get(search.current?)?;
@@ -146,8 +127,6 @@ impl App {
         self.view.is_some()
     }
 
-    /// Prepara el modo Vista para el ancho actual. Solo vuelve a analizar el
-    /// documento cuando cambia el ancho de la terminal.
     pub fn ensure_view(&mut self, width: u16, height: usize) {
         let Some(view) = &mut self.view else {
             return;
@@ -305,8 +284,6 @@ impl App {
         }
     }
 
-    /// Sale de inmediato si no hay cambios pendientes; en caso contrario pide
-    /// confirmación en la línea inferior.
     fn request_quit(&mut self) {
         if self.editor.is_modified() {
             self.prompt = None;
@@ -317,8 +294,6 @@ impl App {
         }
     }
 
-    /// Mientras se espera confirmación, `Ctrl+Q` descarta los cambios,
-    /// `Ctrl+S` guarda y cualquier otra tecla (incluido `Esc`) cancela.
     fn handle_quit_confirmation(&mut self, key: KeyEvent) {
         if is_quit(&key) {
             self.running = false;
@@ -381,8 +356,6 @@ impl App {
         }
     }
 
-    /// Abre la búsqueda desde el cursor. Si se estaba en Vista, vuelve a
-    /// Fuente para poder saltar entre coincidencias.
     fn begin_search(&mut self) {
         if self.view.is_some() {
             self.toggle_view();
@@ -405,8 +378,6 @@ impl App {
         self.message = None;
     }
 
-    /// Recalcula las coincidencias al cambiar el texto buscado y salta a la
-    /// primera que aparece desde el origen de la búsqueda.
     fn refresh_search(&mut self) {
         let Some(input) = self.prompt.as_ref().map(|prompt| prompt.input.clone()) else {
             return;
@@ -485,7 +456,6 @@ impl App {
         self.prompt = None;
     }
 
-    /// Repite la última búsqueda desde el cursor con `F3` o `Shift+F3`.
     fn repeat_search(&mut self, forward: bool) {
         if self.last_search.is_empty() || self.prompt.is_some() {
             return;
@@ -596,8 +566,6 @@ fn is_search_next(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::F(3))
 }
 
-/// Busca `query` en cada línea sin distinguir mayúsculas. La comparación se
-/// hace por grafemas para que los acentos y emojis no desalineen los índices.
 fn find_matches(lines: &[String], query: &str) -> Vec<SearchMatch> {
     if query.is_empty() {
         return Vec::new();
@@ -661,9 +629,6 @@ fn clamp_view(view: &mut View) {
     view.scroll = view.scroll.min(max_scroll(view));
 }
 
-/// En algunas distribuciones, AltGr se representa como Ctrl+Alt. Esos
-/// caracteres deben poder escribirse; Ctrl sin Alt queda reservado para los
-/// atajos.
 fn is_text_input(key: &KeyEvent) -> bool {
     !key.modifiers.contains(KeyModifiers::CONTROL) || key.modifiers.contains(KeyModifiers::ALT)
 }

@@ -1,10 +1,3 @@
-//! Renderizado de Markdown a líneas con estilo para el modo Vista.
-//!
-//! El analizador se encarga de la sintaxis (párrafos, listas, tablas, etc.) y
-//! aquí solo se decide cómo se ve cada elemento en la terminal. Se usan
-//! modificadores (negrita, cursiva, subrayado, atenuado) y nunca colores ni
-//! fondos propios, para respetar el tema de la terminal.
-
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -17,9 +10,6 @@ const BULLETS: [&str; 3] = ["• ", "◦ ", "▪ "];
 const IMAGE_LABEL: &str = "[imagen: ";
 const TAB_SPACES: usize = 4;
 
-/// Convierte Markdown en líneas ya ajustadas al ancho indicado. Cada elemento
-/// puede ocupar varias líneas visuales; el llamador solo tiene que dibujarlas
-/// en orden.
 pub fn render(text: &str, width: u16) -> Vec<Line<'static>> {
     let width = usize::from(width);
     if width == 0 {
@@ -39,8 +29,6 @@ pub fn render(text: &str, width: u16) -> Vec<Line<'static>> {
     builder.finish()
 }
 
-/// Fragmento mínimo de texto con un estilo. Se guarda por grafemas para poder
-/// cortar las líneas sin romper acentos ni emojis compuestos.
 #[derive(Clone)]
 struct Chunk {
     text: String,
@@ -82,14 +70,9 @@ struct InlineStyles {
 }
 
 struct ListState {
-    /// Siguiente número de una lista ordenada; `None` para viñetas.
     next: Option<u64>,
     marker: String,
-    /// Distingue la primera línea del elemento (lleva viñeta o número) de las
-    /// continuaciones, que solo llevan sangría.
     at_start: bool,
-    /// Indica si el elemento ya dibujó alguna línea. Evita añadir una línea
-    /// vacía al cerrar un elemento que termina en una sublista.
     emitted: bool,
 }
 
@@ -133,14 +116,11 @@ impl Builder {
     }
 
     fn handle(&mut self, event: Event<'_>) {
-        // Dentro de una tabla solo interesan los textos de las celdas.
         if self.table.is_some() {
             self.handle_table_event(&event);
             return;
         }
 
-        // Los bloques de código llegan como un único texto con saltos de
-        // línea; se acumulan para no dejar una línea vacía al final.
         if self.code_block {
             match event {
                 Event::Text(text) => {
@@ -221,14 +201,10 @@ impl Builder {
                 if self.lists.is_empty() {
                     self.separate();
                 } else {
-                    // Si el elemento padre aún no ha escrito nada, su viñeta
-                    // debe aparecer antes de la sublista.
                     if self.lists.last().is_some_and(|parent| !parent.emitted) {
                         self.flush(true);
                     }
                     if let Some(parent) = self.lists.last_mut() {
-                        // El texto que siga a la sublista es continuación del
-                        // elemento padre, no el comienzo de otro elemento.
                         parent.at_start = false;
                     }
                 }
@@ -322,8 +298,6 @@ impl Builder {
         match event {
             Event::Start(Tag::TableHead) => table.row.clear(),
             Event::End(TagEnd::TableHead) => {
-                // La cabecera no lleva un `TableRow` propio: sus celdas se
-                // acumulan directamente en `row`.
                 if !table.row.is_empty() {
                     let row = std::mem::take(&mut table.row);
                     table.rows.push(row);
@@ -426,7 +400,6 @@ impl Builder {
         self.code_block = false;
     }
 
-    /// Añade una línea en blanco si hace falta separar dos bloques.
     fn separate(&mut self) {
         self.flush(false);
 
@@ -529,8 +502,6 @@ impl Builder {
         if self.content.is_empty() && !force {
             return;
         }
-        // Un elemento que ya dibujó su viñeta o su texto no necesita otra
-        // línea al cerrarse.
         if self.content.is_empty() && force && self.lists.last().is_some_and(|list| list.emitted) {
             return;
         }
@@ -577,9 +548,6 @@ fn chunk_width(chunks: &[Chunk]) -> usize {
     chunks.iter().map(Chunk::width).sum()
 }
 
-/// Ajusta el contenido a varias líneas visuales. La primera línea lleva el
-/// prefijo del bloque (viñeta, número, barra de cita) y las siguientes la
-/// sangría de continuación.
 fn wrap(
     content: &[Chunk],
     width: usize,
@@ -682,8 +650,6 @@ fn chunk_width_of(chunks: &[Chunk]) -> usize {
     chunks.iter().map(Chunk::width).sum()
 }
 
-/// Une prefijo y contenido agrupando fragmentos consecutivos del mismo estilo
-/// para no crear un `Span` por grafema.
 fn make_line(prefix: &[Chunk], content: &[Chunk]) -> Line<'static> {
     let mut spans = Vec::new();
     let mut pending: Option<(String, Style)> = None;
