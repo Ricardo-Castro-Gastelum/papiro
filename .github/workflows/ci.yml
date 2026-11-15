@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  calidad:
+    name: Formato, clippy y pruebas
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar
+        uses: actions/checkout@v4
+      - name: Instalar Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Caché
+        uses: Swatinem/rust-cache@v2
+      - name: Formato
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Pruebas
+        run: cargo test
+      - name: Compilar
+        run: cargo build --release
+
+  msrv:
+    name: Rust 1.88
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar
+        uses: actions/checkout@v4
+      - name: Instalar Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
+      - name: Caché
+        uses: Swatinem/rust-cache@v2
+      - name: Comprobar
+        run: cargo check --locked

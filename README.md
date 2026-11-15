@@ -5,6 +5,7 @@
 # Papiro
 
 [![crates.io](https://img.shields.io/crates/v/ppr.svg)](https://crates.io/crates/ppr)
+[![CI](https://github.com/Ricardo-Castro-Gastelum/papiro/actions/workflows/ci.yml/badge.svg)](https://github.com/Ricardo-Castro-Gastelum/papiro/actions/workflows/ci.yml)
 
 Un editor y lector de archivos Markdown para la terminal, escrito en Rust.
 
@@ -13,10 +14,9 @@ aparte: usa el fondo y los colores por defecto, no dibuja marcos y no muestra
 pantallas de bienvenida. Al ejecutar `ppr archivo.md`, el archivo se abre
 directamente.
 
-> Estado: Fase 6 completada. Papiro se publica como el paquete `ppr` en
-> crates.io. Ya se puede editar y guardar, leer el documento con el Markdown
-> renderizado, deshacer y rehacer los cambios, ajustar las líneas al ancho de
-> la terminal y buscar texto dentro del documento.
+> Estado: publicado en crates.io como el paquete `ppr`. Incluye edición y
+> guardado, lectura con el Markdown renderizado, deshacer y rehacer, ajuste de
+> líneas al ancho de la terminal y búsqueda de texto.
 
 ## Requisitos
 
@@ -37,6 +37,13 @@ El binario queda en `target/release/ppr`.
 
 ```bash
 ppr archivo.md
+```
+
+Para ver la ayuda o la versión sin abrir ningún archivo:
+
+```bash
+ppr --help
+ppr --version
 ```
 
 Si el archivo no existe, se abre un búfer vacío con esa ruta y se crea al
