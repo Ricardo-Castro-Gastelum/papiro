@@ -7,7 +7,7 @@
 [![crates.io](https://img.shields.io/crates/v/ppr.svg)](https://crates.io/crates/ppr)
 [![CI](https://github.com/Ricardo-Castro-Gastelum/papiro/actions/workflows/ci.yml/badge.svg)](https://github.com/Ricardo-Castro-Gastelum/papiro/actions/workflows/ci.yml)
 
-English · [Español](README.es.md)
+English · [Español](README.es.md) · [Website](https://ricardo-castro-gastelum.github.io/papiro-web/)
 
 A Markdown editor and reader for the terminal, written in Rust.
 
