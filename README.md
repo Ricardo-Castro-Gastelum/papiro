@@ -117,6 +117,20 @@ dot to its right. In Source mode it also shows the cursor line and column
 (`Ln 12, Col 5`) and reminds you of the shortcuts. On narrow terminals, the
 shortcuts are abbreviated so they do not hide the filename.
 
+## Colors
+
+Papiro uses the 16 ANSI colors defined by your terminal theme. Titles, links,
+code, quotes, and Markdown markers in both modes take the colors of the theme
+you already use: change the terminal theme and Papiro follows it. There is no
+color configuration file and no RGB values. Background colors, borders, and the
+dim shortcuts remain untouched.
+
+To run without colors, set `NO_COLOR`:
+
+```bash
+NO_COLOR=1 ppr file.md
+```
+
 ## View mode
 
 `Ctrl+V` shows the document with the Markdown interpreted, without syntax marks.

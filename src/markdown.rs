@@ -4,13 +4,15 @@ use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+use crate::theme::Theme;
+
 const QUOTE_PREFIX: &str = "│ ";
 const CODE_INDENT: &str = "  ";
 const BULLETS: [&str; 3] = ["• ", "◦ ", "▪ "];
 const IMAGE_LABEL: &str = "[imagen: ";
 const TAB_SPACES: usize = 4;
 
-pub fn render(text: &str, width: u16) -> Vec<Line<'static>> {
+pub fn render_with_theme(text: &str, width: u16, theme: &Theme) -> Vec<Line<'static>> {
     let width = usize::from(width);
     if width == 0 {
         return Vec::new();
@@ -22,7 +24,7 @@ pub fn render(text: &str, width: u16) -> Vec<Line<'static>> {
     options.insert(Options::ENABLE_TASKLISTS);
     options.insert(Options::ENABLE_FOOTNOTES);
 
-    let mut builder = Builder::new(width);
+    let mut builder = Builder::new(width, *theme);
     for event in Parser::new_ext(text, options) {
         builder.handle(event);
     }
@@ -86,6 +88,7 @@ struct Table {
 
 struct Builder {
     width: usize,
+    theme: Theme,
     lines: Vec<Line<'static>>,
     content: Vec<Chunk>,
     heading: Option<HeadingLevel>,
@@ -99,9 +102,10 @@ struct Builder {
 }
 
 impl Builder {
-    fn new(width: usize) -> Self {
+    fn new(width: usize, theme: Theme) -> Self {
         Self {
             width,
+            theme,
             lines: Vec::new(),
             content: Vec::new(),
             heading: None,
@@ -143,11 +147,11 @@ impl Builder {
                 self.push_text(&text, style);
             }
             Event::Code(text) => {
-                let style = self.current_style().add_modifier(Modifier::DIM);
+                let style = self.current_style().patch(self.theme.code());
                 self.push_text(&text, style);
             }
             Event::Html(text) | Event::InlineHtml(text) => {
-                self.push_text(&text, dim());
+                self.push_text(&text, self.theme.html());
             }
             Event::SoftBreak => {
                 let style = self.current_style();
@@ -156,20 +160,20 @@ impl Builder {
             Event::HardBreak => self.content.push(Chunk::newline()),
             Event::Rule => {
                 self.separate();
-                let rule = Chunk::new("─".repeat(self.width), dim());
+                let rule = Chunk::new("─".repeat(self.width), self.theme.rule());
                 self.lines.push(make_line(&[], &[rule]));
             }
             Event::FootnoteReference(name) => {
-                let style = self.current_style().add_modifier(Modifier::DIM);
+                let style = self.current_style().patch(self.theme.dim());
                 self.push_text(&format!("[{name}]"), style);
             }
             Event::TaskListMarker(checked) => {
                 self.task_indent = 4;
                 let marker = if checked { "[x] " } else { "[ ] " };
-                self.push_text(marker, dim());
+                self.push_text(marker, self.theme.task());
             }
             Event::InlineMath(text) | Event::DisplayMath(text) => {
-                let style = self.current_style().add_modifier(Modifier::DIM);
+                let style = self.current_style().patch(self.theme.code());
                 self.push_text(&text, style);
             }
         }
@@ -234,7 +238,7 @@ impl Builder {
             }
             Tag::FootnoteDefinition(name) => {
                 self.separate();
-                self.push_text(&format!("[^{name}]: "), dim());
+                self.push_text(&format!("[^{name}]: "), self.theme.rule());
             }
             Tag::Table(_) => {
                 self.separate();
@@ -348,7 +352,7 @@ impl Builder {
         for (index, row) in table.rows.iter().enumerate() {
             let header = index < table.head_rows;
             let style = if header {
-                Style::default().add_modifier(Modifier::BOLD)
+                self.theme.table_header()
             } else {
                 Style::default()
             };
@@ -372,7 +376,7 @@ impl Builder {
 
             if header {
                 let rule_width = if aligned { total } else { self.width };
-                let rule = Chunk::new("─".repeat(rule_width), dim());
+                let rule = Chunk::new("─".repeat(rule_width), self.theme.rule());
                 self.lines.push(make_line(&[], &[rule]));
             }
         }
@@ -393,7 +397,7 @@ impl Builder {
             if index > 0 {
                 self.content.push(Chunk::newline());
             }
-            self.push_text(line, dim());
+            self.push_text(line, self.theme.code());
         }
 
         self.flush(false);
@@ -415,10 +419,14 @@ impl Builder {
 
     fn current_style(&self) -> Style {
         let mut style = match self.heading {
-            Some(HeadingLevel::H1) => {
-                Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            Some(level) => {
+                let level = match level {
+                    HeadingLevel::H1 => 1,
+                    HeadingLevel::H2 => 2,
+                    _ => 3,
+                };
+                self.theme.heading(level)
             }
-            Some(_) => Style::default().add_modifier(Modifier::BOLD),
             None => Style::default(),
         };
 
@@ -432,10 +440,10 @@ impl Builder {
             style = style.add_modifier(Modifier::CROSSED_OUT);
         }
         if self.inline.link > 0 {
-            style = style.add_modifier(Modifier::UNDERLINED);
+            style = style.patch(self.theme.link());
         }
         if self.inline.image > 0 {
-            style = style.add_modifier(Modifier::DIM | Modifier::ITALIC);
+            style = style.patch(self.theme.image());
         }
 
         style
@@ -463,8 +471,8 @@ impl Builder {
 
         if self.quote_depth > 0 {
             let quote = QUOTE_PREFIX.repeat(self.quote_depth);
-            push_chunks(&mut first, &quote, dim());
-            push_chunks(&mut continuation, &quote, dim());
+            push_chunks(&mut first, &quote, self.theme.quote());
+            push_chunks(&mut continuation, &quote, self.theme.quote());
         }
 
         if let Some(list) = self.lists.last() {
@@ -474,7 +482,7 @@ impl Builder {
 
             push_chunks(&mut first, &indent, Style::default());
             if list.at_start {
-                push_chunks(&mut first, &list.marker, dim());
+                push_chunks(&mut first, &list.marker, self.theme.bullet());
             } else {
                 push_chunks(
                     &mut first,
@@ -491,8 +499,8 @@ impl Builder {
         }
 
         if self.code_block {
-            push_chunks(&mut first, CODE_INDENT, dim());
-            push_chunks(&mut continuation, CODE_INDENT, dim());
+            push_chunks(&mut first, CODE_INDENT, self.theme.code());
+            push_chunks(&mut continuation, CODE_INDENT, self.theme.code());
         }
 
         (first, continuation)
@@ -532,10 +540,6 @@ impl Builder {
 
         self.lines
     }
-}
-
-fn dim() -> Style {
-    Style::default().add_modifier(Modifier::DIM)
 }
 
 fn push_chunks(target: &mut Vec<Chunk>, text: &str, style: Style) {
@@ -679,11 +683,16 @@ fn make_line(prefix: &[Chunk], content: &[Chunk]) -> Line<'static> {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::Modifier;
+    use ratatui::style::{Color, Modifier};
     use ratatui::text::Line;
     use unicode_width::UnicodeWidthStr;
 
-    use super::render;
+    use super::render_with_theme;
+    use crate::theme::Theme;
+
+    fn render(text: &str, width: u16) -> Vec<Line<'static>> {
+        render_with_theme(text, width, &Theme::default())
+    }
 
     fn plain(line: &Line<'_>) -> String {
         line.spans
@@ -830,5 +839,41 @@ mod tests {
     #[test]
     fn no_produce_lineas_para_un_texto_vacio() {
         assert!(render("", 40).is_empty());
+    }
+
+    fn has_fg(line: &Line<'_>, color: Color) -> bool {
+        line.spans.iter().any(|span| span.style.fg == Some(color))
+    }
+
+    #[test]
+    fn colorea_los_encabezados_segun_el_tema() {
+        let theme = Theme::ansi();
+        let lines = render_with_theme("# Uno\n\n## Dos\n\n### Tres", 40, &theme);
+
+        assert!(has_fg(&lines[0], Color::Cyan));
+        assert!(has_fg(&lines[2], Color::Blue));
+        assert!(has_fg(&lines[4], Color::Magenta));
+    }
+
+    #[test]
+    fn colorea_codigo_enlaces_y_citas() {
+        let theme = Theme::ansi();
+        let code = render_with_theme("`código`", 40, &theme);
+        let link = render_with_theme("[enlace](url)", 40, &theme);
+        let quote = render_with_theme("> cita", 40, &theme);
+
+        assert!(has_fg(&code[0], Color::Yellow));
+        assert!(has_fg(&link[0], Color::Blue));
+        assert!(has_fg(&quote[0], Color::Green));
+    }
+
+    #[test]
+    fn no_color_no_anade_colores_a_la_vista() {
+        let theme = Theme::plain();
+        let lines = render_with_theme("# Uno\n\n`código`\n\n> cita", 40, &theme);
+
+        for line in &lines {
+            assert!(line.spans.iter().all(|span| span.style.fg.is_none()));
+        }
     }
 }

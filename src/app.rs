@@ -9,6 +9,7 @@ use ratatui::text::Line;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::editor::Editor;
+use crate::theme::Theme;
 use crate::{file, markdown, render};
 
 const QUIT_WARNING: &str = "Cambios sin guardar · Ctrl+S guardar · Ctrl+Q salir sin guardar";
@@ -18,6 +19,8 @@ pub struct App {
     running: bool,
     prompt: Option<Prompt>,
     message: Option<String>,
+    message_error: bool,
+    theme: Theme,
     last_save_name: String,
     view: Option<View>,
     search: Option<Search>,
@@ -62,11 +65,17 @@ struct Search {
 
 impl App {
     pub fn new(editor: Editor) -> Self {
+        Self::with_theme(editor, Theme::from_env())
+    }
+
+    pub fn with_theme(editor: Editor, theme: Theme) -> Self {
         Self {
             editor,
             running: true,
             prompt: None,
             message: None,
+            message_error: false,
+            theme,
             last_save_name: String::new(),
             view: None,
             search: None,
@@ -123,6 +132,24 @@ impl App {
         self.message.as_deref()
     }
 
+    pub fn message_is_error(&self) -> bool {
+        self.message_error
+    }
+
+    pub fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    fn set_message(&mut self, text: impl Into<String>, error: bool) {
+        self.message = Some(text.into());
+        self.message_error = error;
+    }
+
+    fn clear_message(&mut self) {
+        self.message = None;
+        self.message_error = false;
+    }
+
     pub fn is_view_mode(&self) -> bool {
         self.view.is_some()
     }
@@ -134,7 +161,7 @@ impl App {
 
         if !view.rendered || view.width != width {
             let content = self.editor.content();
-            view.lines = markdown::render(&content, width);
+            view.lines = markdown::render_with_theme(&content, width, &self.theme);
             view.width = width;
             view.rendered = true;
         }
@@ -208,7 +235,7 @@ impl App {
             return;
         }
 
-        self.message = None;
+        self.clear_message();
 
         if self.prompt.is_some() {
             self.handle_prompt_key(key);
@@ -288,7 +315,7 @@ impl App {
         if self.editor.is_modified() {
             self.prompt = None;
             self.confirm_quit = true;
-            self.message = Some(QUIT_WARNING.to_owned());
+            self.set_message(QUIT_WARNING, false);
         } else {
             self.running = false;
         }
@@ -299,11 +326,11 @@ impl App {
             self.running = false;
         } else if is_save(&key) {
             self.confirm_quit = false;
-            self.message = None;
+            self.clear_message();
             self.begin_save();
         } else {
             self.confirm_quit = false;
-            self.message = None;
+            self.clear_message();
         }
     }
 
@@ -375,7 +402,7 @@ impl App {
             kind: PromptKind::Search,
             input: String::new(),
         });
-        self.message = None;
+        self.clear_message();
     }
 
     fn refresh_search(&mut self) {
@@ -471,7 +498,7 @@ impl App {
         let matches = find_matches(self.editor.lines(), &query);
 
         if matches.is_empty() {
-            self.message = Some(format!("Sin coincidencias para «{query}»."));
+            self.set_message(format!("Sin coincidencias para «{query}»."), false);
             return;
         }
 
@@ -493,7 +520,10 @@ impl App {
 
         let found = matches[target];
         self.editor.set_cursor(found.line, found.start);
-        self.message = Some(format!("Coincidencia {} de {}", target + 1, matches.len()));
+        self.set_message(
+            format!("Coincidencia {} de {}", target + 1, matches.len()),
+            false,
+        );
     }
 
     fn begin_save(&mut self) {
@@ -514,7 +544,7 @@ impl App {
 
         let name = prompt.input.trim();
         if name.is_empty() {
-            self.message = Some("El nombre del archivo no puede estar vacío.".to_owned());
+            self.set_message("El nombre del archivo no puede estar vacío.", true);
             return;
         }
 
@@ -527,9 +557,9 @@ impl App {
             Ok(()) => {
                 self.editor.set_path(path.to_path_buf());
                 self.editor.mark_saved();
-                self.message = Some("Guardado.".to_owned());
+                self.set_message("Guardado.", false);
             }
-            Err(error) => self.message = Some(format!("{error:#}")),
+            Err(error) => self.set_message(format!("{error:#}"), true),
         }
     }
 }

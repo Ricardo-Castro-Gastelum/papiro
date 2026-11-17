@@ -1,12 +1,13 @@
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, PromptKind};
 use crate::editor::{Editor, VisualRow, display_range};
+use crate::syntax;
 
 const SAVE_HINT: &str = "Ctrl+S · guardar   Ctrl+V · vista   Ctrl+F · buscar   Ctrl+Z · deshacer   Ctrl+Y · rehacer   Ctrl+Q · salir ";
 const VIEW_HINT: &str = "Ctrl+V · editar   Ctrl+F · buscar   Ctrl+Q · salir ";
@@ -52,38 +53,74 @@ fn draw_source(frame: &mut Frame, area: Rect, app: &App, rows: &[VisualRow]) {
     let start = app.editor.scroll_row().min(rows.len());
     let end = (start + usize::from(area.height)).min(rows.len());
 
+    let fences = syntax::fence_states(app.editor.lines());
     let lines = rows[start..end]
         .iter()
-        .map(|row| source_row(app, row))
+        .map(|row| source_row(app, row, fences.get(row.line).copied().unwrap_or(false)))
         .collect::<Vec<_>>();
 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-fn source_row(app: &App, row: &VisualRow) -> Line<'static> {
+fn source_row(app: &App, row: &VisualRow, in_fence: bool) -> Line<'static> {
     let line = &app.editor.lines()[row.line];
-    let Some((match_line, match_start, match_end)) = app.current_match() else {
-        return Line::raw(display_range(line, row.start, row.end));
-    };
+    let theme = app.theme();
+    let mut pieces = Vec::new();
 
-    let start = match_start.max(row.start);
-    let end = match_end.min(row.end);
-    if match_line != row.line || start >= end {
-        return Line::raw(display_range(line, row.start, row.end));
+    for segment in syntax::highlight(line, in_fence, theme) {
+        let start = segment.start.max(row.start);
+        let end = segment.end.min(row.end);
+        if start < end {
+            pieces.push((start, end, segment.style));
+        }
     }
 
-    let highlight = Style::default().add_modifier(Modifier::REVERSED);
-    let mut spans = Vec::new();
+    if let Some((match_line, match_start, match_end)) = app.current_match()
+        && match_line == row.line
+    {
+        let start = match_start.max(row.start);
+        let end = match_end.min(row.end);
+        if start < end {
+            pieces = mark_match(pieces, start, end, theme.search());
+        }
+    }
 
-    if start > row.start {
-        spans.push(Span::raw(display_range(line, row.start, start)));
-    }
-    spans.push(Span::styled(display_range(line, start, end), highlight));
-    if end < row.end {
-        spans.push(Span::raw(display_range(line, end, row.end)));
-    }
+    let spans = pieces
+        .into_iter()
+        .map(|(start, end, style)| Span::styled(display_range(line, start, end), style))
+        .collect::<Vec<_>>();
 
     Line::from(spans)
+}
+
+fn mark_match(
+    pieces: Vec<(usize, usize, Style)>,
+    start: usize,
+    end: usize,
+    highlight: Style,
+) -> Vec<(usize, usize, Style)> {
+    let mut result = Vec::new();
+
+    for (piece_start, piece_end, style) in pieces {
+        if piece_end <= start || piece_start >= end {
+            result.push((piece_start, piece_end, style));
+            continue;
+        }
+
+        if piece_start < start {
+            result.push((piece_start, start, style));
+        }
+
+        let marked_start = piece_start.max(start);
+        let marked_end = piece_end.min(end);
+        result.push((marked_start, marked_end, style.patch(highlight)));
+
+        if piece_end > end {
+            result.push((end, piece_end, style));
+        }
+    }
+
+    result
 }
 
 fn draw_view(frame: &mut Frame, area: Rect, app: &App) {
@@ -111,14 +148,18 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let dim = Style::default().add_modifier(Modifier::DIM);
+    let theme = app.theme();
+    let dim = theme.dim();
 
     let blank = " ".repeat(usize::from(area.width));
     frame.render_widget(Paragraph::new(blank), area);
 
     if let Some(input) = app.prompt_input() {
         let label = prompt_label(app.prompt_kind());
-        let mut spans = vec![Span::styled(label, dim), Span::raw(safe_text(input))];
+        let mut spans = vec![
+            Span::styled(label, theme.prompt()),
+            Span::raw(safe_text(input)),
+        ];
 
         if let Some(status) = app.search_status() {
             spans.push(Span::styled(format!("   {status}"), dim));
@@ -129,18 +170,30 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     if let Some(message) = app.message() {
-        frame.render_widget(Paragraph::new(format!(" {}", safe_text(message))), area);
+        let style = if app.message_is_error() {
+            theme.error()
+        } else {
+            Style::default()
+        };
+        let line = Line::from(Span::styled(format!(" {}", safe_text(message)), style));
+        frame.render_widget(Paragraph::new(line), area);
         return;
     }
 
-    let mut name = if app.is_view_mode() {
-        format!(" Vista · {}", safe_text(&app.editor.display_name()))
+    let mut name_spans = Vec::new();
+    if app.is_view_mode() {
+        name_spans.push(Span::styled(" Vista · ", theme.mode()));
     } else {
-        format!(" {}", safe_text(&app.editor.display_name()))
-    };
-    if app.editor.is_modified() {
-        name.push_str(" •");
+        name_spans.push(Span::styled(" ", dim));
     }
+    name_spans.push(Span::styled(safe_text(&app.editor.display_name()), dim));
+    if app.editor.is_modified() {
+        name_spans.push(Span::styled(" •", theme.modified()));
+    }
+    let name = name_spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
     let name_width = u16::try_from(UnicodeWidthStr::width(name.as_str())).unwrap_or(u16::MAX);
 
     let full_hint = if app.is_view_mode() {
@@ -186,9 +239,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         ..area
     };
 
-    frame.render_widget(Paragraph::new(name).style(dim), name_area);
+    frame.render_widget(Paragraph::new(Line::from(name_spans)), name_area);
     frame.render_widget(
-        Paragraph::new(hints).style(dim).alignment(Alignment::Right),
+        Paragraph::new(Line::from(Span::styled(hints, dim))).alignment(Alignment::Right),
         area,
     );
 }
@@ -228,4 +281,97 @@ fn safe_text(text: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::Line;
+
+    use super::{mark_match, source_row};
+    use crate::app::App;
+    use crate::editor::{Editor, VisualRow, display_range};
+    use crate::theme::Theme;
+
+    fn text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    #[test]
+    fn el_resaltado_no_cambia_el_texto_visible() {
+        let app = App::with_theme(
+            Editor::from_text("texto **mundo** `código`", None),
+            Theme::ansi(),
+        );
+        let row = VisualRow {
+            line: 0,
+            start: 0,
+            end: 24,
+        };
+        let line = source_row(&app, &row, false);
+
+        assert_eq!(text(&line), "texto **mundo** `código`");
+        assert!(
+            line.spans
+                .iter()
+                .any(|span| span.style.fg == Some(Color::Magenta))
+        );
+        assert!(
+            line.spans
+                .iter()
+                .any(|span| span.style.fg == Some(Color::Yellow))
+        );
+    }
+
+    #[test]
+    fn conserva_la_expansion_de_las_pestanas_al_recortar() {
+        let app = App::with_theme(Editor::from_text("a\tb", None), Theme::ansi());
+        let row = VisualRow {
+            line: 0,
+            start: 1,
+            end: 3,
+        };
+        let line = source_row(&app, &row, false);
+
+        assert_eq!(text(&line), display_range("a\tb", 1, 3));
+    }
+
+    #[test]
+    fn el_backend_recibe_colores_de_la_paleta() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 3)).expect("backend de prueba");
+        let mut app = App::with_theme(Editor::from_text("# Título", None), Theme::ansi());
+        terminal
+            .draw(|frame| super::draw(frame, &mut app))
+            .expect("dibujar");
+
+        let buffer = terminal.backend().buffer();
+        assert!(
+            buffer
+                .content
+                .iter()
+                .any(|cell| cell.style().fg == Some(Color::Cyan))
+        );
+    }
+
+    #[test]
+    fn la_busqueda_se_superpone_al_color_de_sintaxis() {
+        let base = Style::default().fg(Color::Magenta);
+        let pieces = vec![(0, 4, base), (4, 8, base)];
+        let marked = mark_match(
+            pieces,
+            2,
+            6,
+            Style::default().add_modifier(Modifier::REVERSED),
+        );
+
+        assert_eq!(marked.len(), 4);
+        assert!(marked[1].2.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(marked[1].2.fg, Some(Color::Magenta));
+        assert!(!marked[0].2.add_modifier.contains(Modifier::REVERSED));
+    }
 }

@@ -3,6 +3,8 @@ mod editor;
 mod file;
 mod markdown;
 mod render;
+mod syntax;
+mod theme;
 
 use std::env;
 use std::io::{self, Stdout, stdout};

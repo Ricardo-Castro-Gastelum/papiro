@@ -116,6 +116,20 @@ guardar, un punto `•` a su derecha. En el modo Fuente también indica la líne
 la columna del cursor (`Ln 12, Col 5`) y recuerda los atajos. En terminales
 angostas los atajos se abrevian para no ocultar el nombre del archivo.
 
+## Colores
+
+Papiro usa los 16 colores ANSI definidos por el tema de tu terminal. Los títulos,
+enlaces, código, citas y las marcas de Markdown de ambos modos toman los colores
+del tema que ya usas: si cambias el tema de la terminal, Papiro lo sigue. No hay
+archivo de configuración de colores ni valores RGB. El fondo, los marcos y los
+atajos atenuados no cambian.
+
+Para ejecutarlo sin colores, define `NO_COLOR`:
+
+```bash
+NO_COLOR=1 ppr archivo.md
+```
+
 ## Modo Vista
 
 `Ctrl+V` muestra el documento con el Markdown interpretado, sin marcas de
