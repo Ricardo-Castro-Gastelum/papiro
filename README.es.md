@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/PapiroMd.png" alt="Papiro" width="288">
+  <img src="assets/Github.png" alt="Papiro" width="288">
 </p>
 
 # Papiro
