@@ -15,6 +15,11 @@ const COMPACT_SAVE_HINT: &str = "^S guardar ^V vista ^F buscar ^Z deshacer ^Y re
 const COMPACT_VIEW_HINT: &str = "^V editar ^F buscar ^Q salir ";
 const MINIMAL_SAVE_HINT: &str = "^S ^V ^F ^Z ^Y ^Q ";
 const MINIMAL_VIEW_HINT: &str = "^V ^F ^Q ";
+const VIM_HINT: &str = "i insertar   Esc normal   :w guardar   :q salir   / buscar   Ctrl+V vista ";
+const VIM_INSERT_HINT: &str = "Esc normal   Ctrl+S guardar   Ctrl+V vista   Ctrl+Q salir ";
+const VIM_VIEW_HINT: &str = "j/k desplazar   Esc fuente   Ctrl+V editar ";
+const VIM_COMPACT_HINT: &str = "i ins Esc norm :w g :q s / b ^V vista ";
+const VIM_MINIMAL_HINT: &str = "^V ^Q ";
 const PROMPT_LABEL: &str = " Guardar como: ";
 const SEARCH_LABEL: &str = " Buscar: ";
 
@@ -22,6 +27,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let [text_area, footer_area] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+    app.set_text_area(text_area);
 
     let source_rows = if app.is_view_mode() {
         app.ensure_view(text_area.width, usize::from(text_area.height));
@@ -186,6 +192,10 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         name_spans.push(Span::styled(" ", dim));
     }
+    let label = app.mode_label();
+    if !label.is_empty() {
+        name_spans.push(Span::styled(format!(" {label} "), theme.mode()));
+    }
     name_spans.push(Span::styled(safe_text(&app.editor.display_name()), dim));
     if app.editor.is_modified() {
         name_spans.push(Span::styled(" •", theme.modified()));
@@ -196,20 +206,18 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         .collect::<String>();
     let name_width = u16::try_from(UnicodeWidthStr::width(name.as_str())).unwrap_or(u16::MAX);
 
-    let full_hint = if app.is_view_mode() {
-        VIEW_HINT
+    let (full_hint, compact_hint, minimal_hint) = if app.is_vim() {
+        if app.is_view_mode() {
+            (VIM_VIEW_HINT, VIM_COMPACT_HINT, VIM_MINIMAL_HINT)
+        } else if app.is_insert_mode() {
+            (VIM_INSERT_HINT, VIM_COMPACT_HINT, VIM_MINIMAL_HINT)
+        } else {
+            (VIM_HINT, VIM_COMPACT_HINT, VIM_MINIMAL_HINT)
+        }
+    } else if app.is_view_mode() {
+        (VIEW_HINT, COMPACT_VIEW_HINT, MINIMAL_VIEW_HINT)
     } else {
-        SAVE_HINT
-    };
-    let compact_hint = if app.is_view_mode() {
-        COMPACT_VIEW_HINT
-    } else {
-        COMPACT_SAVE_HINT
-    };
-    let minimal_hint = if app.is_view_mode() {
-        MINIMAL_VIEW_HINT
-    } else {
-        MINIMAL_SAVE_HINT
+        (SAVE_HINT, COMPACT_SAVE_HINT, MINIMAL_SAVE_HINT)
     };
 
     let position = if app.is_view_mode() {

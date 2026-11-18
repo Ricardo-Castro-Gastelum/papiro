@@ -18,7 +18,9 @@ directamente.
 
 > Estado: publicado en crates.io como el paquete `ppr`. Incluye edición y
 > guardado, lectura con el Markdown renderizado, deshacer y rehacer, ajuste de
-> líneas al ancho de la terminal y búsqueda de texto.
+> líneas al ancho de la terminal, búsqueda de texto, atajos estilo vim, un
+> archivo TOML para personalizar los atajos, soporte de ratón y conservación de
+> la posición de desplazamiento entre Fuente y Vista.
 
 ## Requisitos
 
@@ -48,6 +50,16 @@ ppr --help
 ppr --version
 ```
 
+Para usar los atajos estilo vim en una sola ejecución, pasa `--vim` (o `-vim`).
+Para forzar los atajos normales, pasa `--default` (o `-default`). También
+funcionan `--keymap vim` y `--keymap default`. La línea de comandos tiene
+prioridad sobre el archivo de configuración.
+
+```bash
+ppr -vim archivo.md
+ppr -default archivo.md
+```
+
 Si el archivo no existe, se abre un búfer vacío con esa ruta y se crea al
 guardarlo por primera vez. Si se ejecuta `ppr` sin argumentos, se abre un búfer
 sin título.
@@ -55,7 +67,7 @@ sin título.
 Al guardar un búfer sin nombre, Papiro pide el nombre en la línea inferior.
 Escribe la ruta y pulsa `Enter` para guardar, o `Esc` para cancelar.
 
-### Atajos
+### Atajos predeterminados
 
 | Tecla | Acción |
 | --- | --- |
@@ -79,6 +91,64 @@ Escribe la ruta y pulsa `Enter` para guardar, o `Esc` para cancelar.
 `Ctrl+Q` sale de inmediato si no hay cambios pendientes. Si los hay, la línea
 inferior muestra un aviso: `Ctrl+Q` otra vez descarta los cambios y sale,
 `Ctrl+S` guarda y cualquier otra tecla (incluido `Esc`) cancela.
+
+### Atajos estilo vim
+
+Con `--vim` (o `keymap = "vim"` en el archivo de configuración), Papiro empieza
+en modo Normal. `i`, `a` u `o` entran en modo Insertar, donde se escribe texto
+con normalidad; `Esc` vuelve al modo Normal.
+
+| Tecla | Acción |
+| --- | --- |
+| `h` / `j` / `k` / `l` | Mover el cursor a la izquierda / abajo / arriba / derecha |
+| `w` / `b` | Moverse por palabras, hacia delante / hacia atrás |
+| `0` / `$` | Ir al principio / al final de la línea |
+| `x` | Borrar el carácter bajo el cursor |
+| `i` / `a` / `o` | Insertar antes / después del cursor / en una línea nueva debajo |
+| `Esc` | Salir del modo Insertar (o volver de Vista a Fuente) |
+| `u` / `Ctrl+R` | Deshacer / rehacer |
+| `/` | Buscar; `n` / `N` saltan a la coincidencia siguiente / anterior |
+| `:w` / `:q` | Guardar / salir |
+| `Ctrl+S`, `Ctrl+V`, `Ctrl+F`, `Ctrl+Q` | Conservan sus acciones habituales |
+
+En el modo Vista, `j`/`k` desplazan el texto renderizado y `Esc` o `Ctrl+V`
+vuelven a Fuente. La barra de estado muestra `NORMAL`, `INSERT` o `VISTA` y una
+pista breve del modo activo.
+
+## Configuración
+
+Papiro lee `$XDG_CONFIG_HOME/papiro/config.toml`, o
+`~/.config/papiro/config.toml` si `XDG_CONFIG_HOME` no está definido. No pasa
+nada si el archivo no existe. Un archivo inválido produce un aviso por stderr y
+se usan los valores predeterminados. `--vim` / `--default` tienen prioridad
+sobre `keymap`.
+
+```toml
+keymap = "vim"
+
+[bindings]
+save = ["Ctrl+S", ":w"]
+quit = ["Ctrl+Q", ":q"]
+view = ["Ctrl+V"]
+search = ["Ctrl+F", "/"]
+search_next = ["F3", "n"]
+search_prev = ["Shift+F3", "N"]
+undo = ["Ctrl+Z", "u"]
+redo = ["Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+R"]
+```
+
+Cada acción acepta una lista de atajos. Las secuencias de varias teclas, como
+`:w`, se escriben como una sola cadena. Los modificadores disponibles son
+`Ctrl`, `Shift` y `Alt`; las teclas de función son `F1`–`F12`, y entre las teclas
+con nombre están `Esc`, `Enter`, `Tab`, `Backspace`, `Delete`, `Home`, `End`,
+`PageUp`, `PageDown`, `Up`, `Down`, `Left` y `Right`. También se aceptan alias
+de acciones como `write`, `exit`, `find`, `next` y `previous`.
+
+## Ratón
+
+Un clic izquierdo en Fuente coloca el cursor en el carácter pulsado. Un clic
+izquierdo en Vista vuelve a Fuente cerca de la línea renderizada correspondiente.
+La rueda desplaza Fuente o Vista tres líneas a la vez.
 
 ## Deshacer y rehacer
 
@@ -152,6 +222,10 @@ El texto se ajusta automáticamente al ancho de la terminal, respetando los
 acentos y los emojis compuestos. Es un ajuste visual: el archivo guardado no
 cambia.
 
+Al cambiar entre Fuente y Vista se conserva la posición de lectura: Papiro
+traslada el desplazamiento de forma proporcional entre las filas de la fuente y
+las líneas renderizadas, en ambos sentidos.
+
 ## Guardado
 
 Papiro escribe primero en un archivo temporal situado en el mismo directorio y
@@ -168,6 +242,14 @@ Desde crates.io:
 ```bash
 cargo install ppr
 ```
+
+Si Cargo muestra `warning: be sure to add /home/tu-usuario/.cargo/bin to your
+PATH to be able to run the installed binaries`, es normal: el binario se
+instaló, pero tu terminal todavía no sabe dónde encontrarlo. Ejecuta
+`source "$HOME/.cargo/env"` o añade
+`export PATH="$HOME/.cargo/bin:$PATH"` a la configuración de tu shell (por
+ejemplo `~/.bashrc` o `~/.zshrc`) y abre una terminal nueva. Comprueba el
+resultado con `ppr --version`.
 
 Para instalarlo desde una copia local del código:
 

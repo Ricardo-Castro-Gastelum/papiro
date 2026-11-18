@@ -18,7 +18,8 @@ directly.
 
 > Status: published on crates.io as the `ppr` package. It includes editing and
 > saving, a rendered Markdown view, undo/redo, line wrapping to the terminal
-> width, and text search.
+> width, text search, vim-style keybindings, a TOML config file for custom
+> shortcuts, mouse support, and scroll preservation between Source and View.
 >
 > Note: the in-app interface and `--help` text are currently in Spanish.
 
@@ -50,6 +51,16 @@ ppr --help
 ppr --version
 ```
 
+To use vim-style keybindings for one run, pass `--vim` (or `-vim`). To force the
+default bindings, pass `--default` (or `-default`). `--keymap vim` and
+`--keymap default` work as well. The command line takes precedence over the
+config file.
+
+```bash
+ppr -vim file.md
+ppr -default file.md
+```
+
 If the file does not exist, Papiro opens an empty buffer with that path and
 creates the file the first time you save. Running `ppr` with no arguments opens
 an untitled buffer.
@@ -57,7 +68,7 @@ an untitled buffer.
 When saving an untitled buffer, Papiro asks for the filename in the bottom line.
 Type the path and press `Enter` to save, or `Esc` to cancel.
 
-### Keybindings
+### Default keybindings
 
 | Key | Action |
 | --- | --- |
@@ -81,6 +92,63 @@ Type the path and press `Enter` to save, or `Esc` to cancel.
 `Ctrl+Q` quits immediately when there are no pending changes. Otherwise, the
 bottom line shows a warning: `Ctrl+Q` again discards the changes and quits,
 `Ctrl+S` saves, and any other key (including `Esc`) cancels.
+
+### Vim keybindings
+
+With `--vim` (or `keymap = "vim"` in the config file), Papiro starts in Normal
+mode. `i`, `a`, or `o` enter Insert mode, where text is typed normally; `Esc`
+returns to Normal.
+
+| Key | Action |
+| --- | --- |
+| `h` / `j` / `k` / `l` | Move the cursor left / down / up / right |
+| `w` / `b` | Move by words, forward / backward |
+| `0` / `$` | Go to the start / end of the line |
+| `x` | Delete the character under the cursor |
+| `i` / `a` / `o` | Insert before / after the cursor / on a new line below |
+| `Esc` | Leave Insert mode (or return from View to Source) |
+| `u` / `Ctrl+R` | Undo / redo |
+| `/` | Search; `n` / `N` jump to the next / previous match |
+| `:w` / `:q` | Save / quit |
+| `Ctrl+S`, `Ctrl+V`, `Ctrl+F`, `Ctrl+Q` | Keep their default actions |
+
+In View mode, `j`/`k` scroll the rendered text, and `Esc` or `Ctrl+V` returns to
+Source. The status bar shows `NORMAL`, `INSERT`, or `VISTA` and a short hint for
+the active mode.
+
+## Configuration
+
+Papiro reads `$XDG_CONFIG_HOME/papiro/config.toml`, or
+`~/.config/papiro/config.toml` when `XDG_CONFIG_HOME` is unset. Missing files
+are fine. Invalid files produce a warning on stderr and fall back to the
+defaults. `--vim` / `--default` override the `keymap` setting.
+
+```toml
+keymap = "vim"
+
+[bindings]
+save = ["Ctrl+S", ":w"]
+quit = ["Ctrl+Q", ":q"]
+view = ["Ctrl+V"]
+search = ["Ctrl+F", "/"]
+search_next = ["F3", "n"]
+search_prev = ["Shift+F3", "N"]
+undo = ["Ctrl+Z", "u"]
+redo = ["Ctrl+Y", "Ctrl+Shift+Z", "Ctrl+R"]
+```
+
+Each action accepts a list of shortcuts. Multi-key sequences, such as `:w`,
+are written as a single string. Available modifiers are `Ctrl`, `Shift`, and
+`Alt`; function keys are `F1`–`F12`, and named keys include `Esc`, `Enter`,
+`Tab`, `Backspace`, `Delete`, `Home`, `End`, `PageUp`, `PageDown`, `Up`,
+`Down`, `Left`, and `Right`. Action aliases include `write`, `exit`, `find`,
+`next`, and `previous`.
+
+## Mouse
+
+Left-click in Source places the cursor at the clicked character. Left-click in
+View returns to Source near the corresponding rendered line. The wheel scrolls
+Source or View by three lines at a time.
 
 ## Undo and redo
 
@@ -152,6 +220,10 @@ The view supports:
 Text wraps automatically to the terminal width, preserving accents and composed
 emojis. This is a visual wrap: the saved file does not change.
 
+Switching between Source and View preserves the reading position: Papiro maps
+the scroll offset proportionally between source rows and rendered lines, in both
+directions.
+
 ## Saving
 
 Papiro writes to a temporary file in the same directory first and then renames
@@ -168,6 +240,14 @@ From crates.io:
 ```bash
 cargo install ppr
 ```
+
+If Cargo prints `warning: be sure to add /home/you/.cargo/bin to your PATH to be
+able to run the installed binaries`, that is expected: the binary was installed
+but your shell does not know where to find it yet. Run
+`source "$HOME/.cargo/env"`, or add
+`export PATH="$HOME/.cargo/bin:$PATH"` to your shell configuration (for example
+`~/.bashrc` or `~/.zshrc`) and open a new terminal. Then check with
+`ppr --version`.
 
 To install from a local copy of the source:
 

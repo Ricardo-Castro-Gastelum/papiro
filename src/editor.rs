@@ -136,6 +136,30 @@ impl Editor {
         self.scroll_row
     }
 
+    pub fn viewport_height(&self) -> usize {
+        self.viewport_height
+    }
+
+    pub fn scroll_rows(&mut self, delta: isize) {
+        let max = self.rows().len().saturating_sub(self.viewport_height);
+        let current = isize::try_from(self.scroll_row).unwrap_or(isize::MAX);
+        let limit = isize::try_from(max).unwrap_or(isize::MAX);
+        let target = current.saturating_add(delta).clamp(0, limit);
+        self.scroll_row = usize::try_from(target).unwrap_or(0);
+    }
+
+    pub fn set_scroll_row(&mut self, row: usize) {
+        let max = self.rows().len().saturating_sub(self.viewport_height);
+        self.scroll_row = row.min(max);
+    }
+
+    pub fn position_at(&self, row_index: usize, cell: usize) -> Option<(usize, usize)> {
+        let rows = self.rows();
+        let row = rows.get(row_index)?;
+        let column = column_at_cell(&self.lines[row.line], row.start, row.end, cell);
+        Some((row.line, column))
+    }
+
     pub fn cursor_cell(&self) -> usize {
         cell_width(&self.lines[self.cursor_line], self.cursor_column)
     }

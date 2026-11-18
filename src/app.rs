@@ -2,17 +2,29 @@ use std::io::Stdout;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::layout::Rect;
 use ratatui::text::Line;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::editor::Editor;
+use crate::keys::{Command, KeySpec, Preset, Settings};
 use crate::theme::Theme;
 use crate::{file, markdown, render};
 
 const QUIT_WARNING: &str = "Cambios sin guardar · Ctrl+S guardar · Ctrl+Q salir sin guardar";
+const WHEEL_LINES: isize = 3;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Insert,
+    Normal,
+}
 
 pub struct App {
     pub editor: Editor,
@@ -21,6 +33,11 @@ pub struct App {
     message: Option<String>,
     message_error: bool,
     theme: Theme,
+    settings: Settings,
+    mode: Mode,
+    pending: Vec<KeySpec>,
+    text_area: Rect,
+    view_scroll_ratio: Option<f64>,
     last_save_name: String,
     view: Option<View>,
     search: Option<Search>,
@@ -37,7 +54,7 @@ struct View {
     viewport_height: usize,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptKind {
     SaveAs,
     Search,
@@ -64,11 +81,27 @@ struct Search {
 }
 
 impl App {
+    #[cfg(test)]
     pub fn new(editor: Editor) -> Self {
         Self::with_theme(editor, Theme::from_env())
     }
 
+    #[cfg(test)]
     pub fn with_theme(editor: Editor, theme: Theme) -> Self {
+        Self::with_options(editor, theme, Settings::default())
+    }
+
+    pub fn with_settings(editor: Editor, settings: Settings) -> Self {
+        Self::with_options(editor, Theme::from_env(), settings)
+    }
+
+    pub fn with_options(editor: Editor, theme: Theme, settings: Settings) -> Self {
+        let mode = if settings.preset() == Preset::Vim {
+            Mode::Normal
+        } else {
+            Mode::Insert
+        };
+
         Self {
             editor,
             running: true,
@@ -76,6 +109,11 @@ impl App {
             message: None,
             message_error: false,
             theme,
+            settings,
+            mode,
+            pending: Vec::new(),
+            text_area: Rect::default(),
+            view_scroll_ratio: None,
             last_save_name: String::new(),
             view: None,
             search: None,
@@ -90,12 +128,36 @@ impl App {
 
             match event::read().context("No se pudo leer un evento de la terminal")? {
                 Event::Key(key) if key.kind != KeyEventKind::Release => self.handle_key(key),
+                Event::Mouse(mouse) => self.handle_mouse(mouse),
                 Event::Resize(_, _) => {}
                 _ => {}
             }
         }
 
         Ok(())
+    }
+
+    pub fn set_text_area(&mut self, area: Rect) {
+        self.text_area = area;
+    }
+
+    pub fn mode_label(&self) -> &'static str {
+        if self.view.is_some() || self.settings.preset() != Preset::Vim {
+            return "";
+        }
+        if self.mode == Mode::Normal {
+            "NORMAL"
+        } else {
+            "INSERT"
+        }
+    }
+
+    pub fn is_vim(&self) -> bool {
+        self.settings.preset() == Preset::Vim
+    }
+
+    pub fn is_insert_mode(&self) -> bool {
+        self.mode == Mode::Insert
     }
 
     pub fn prompt_input(&self) -> Option<&str> {
@@ -155,6 +217,7 @@ impl App {
     }
 
     pub fn ensure_view(&mut self, width: u16, height: usize) {
+        let ratio = self.view_scroll_ratio.take();
         let Some(view) = &mut self.view else {
             return;
         };
@@ -164,6 +227,9 @@ impl App {
             view.lines = markdown::render_with_theme(&content, width, &self.theme);
             view.width = width;
             view.rendered = true;
+            if let Some(ratio) = ratio {
+                view.scroll = from_ratio(ratio, height, view.lines.len());
+            }
         }
 
         view.viewport_height = height;
@@ -180,10 +246,32 @@ impl App {
 
     fn toggle_view(&mut self) {
         self.editor.break_undo_group();
-        self.view = match self.view.take() {
-            Some(_) => None,
-            None => Some(View::default()),
-        };
+        self.pending.clear();
+
+        match self.view.take() {
+            Some(view) => {
+                let ratio = progress(view.scroll, view.viewport_height, view.lines.len());
+                let total = self.editor.rows().len();
+                let viewport = self.editor.viewport_height();
+                let target = from_ratio(ratio, viewport, total);
+                self.editor.set_scroll_row(target);
+
+                let rows = self.editor.rows();
+                if let Some(row) = rows.get(target) {
+                    self.editor.set_cursor(row.line, row.start);
+                }
+            }
+            None => {
+                let rows = self.editor.rows();
+                let ratio = progress(
+                    self.editor.scroll_row(),
+                    self.editor.viewport_height(),
+                    rows.len(),
+                );
+                self.view_scroll_ratio = Some(ratio);
+                self.view = Some(View::default());
+            }
+        }
     }
 
     fn scroll_view_up(&mut self) {
@@ -226,44 +314,64 @@ impl App {
 
     fn handle_key(&mut self, key: KeyEvent) {
         if self.confirm_quit {
-            self.handle_quit_confirmation(key);
+            if is_escape(&key) {
+                self.confirm_quit = false;
+                self.clear_message();
+            } else if self.is_bound(&key, Command::Quit) {
+                self.running = false;
+            } else if self.is_bound(&key, Command::Save) {
+                self.confirm_quit = false;
+                self.clear_message();
+                self.begin_save();
+            } else {
+                self.confirm_quit = false;
+                self.clear_message();
+            }
             return;
         }
 
-        if is_quit(&key) {
+        if self.is_bound(&key, Command::Quit) {
             self.request_quit();
             return;
         }
 
         self.clear_message();
 
+        if is_escape(&key) {
+            if self.prompt.is_some() {
+                if self.prompt_kind() == Some(PromptKind::Search) {
+                    self.close_search();
+                } else {
+                    self.prompt = None;
+                }
+            } else if self.view.is_some() {
+                self.toggle_view();
+            } else if self.settings.preset() == Preset::Vim && self.mode == Mode::Insert {
+                self.mode = Mode::Normal;
+            }
+            self.pending.clear();
+            return;
+        }
+
         if self.prompt.is_some() {
             self.handle_prompt_key(key);
             return;
         }
 
-        if is_save(&key) {
-            self.begin_save();
-            return;
-        }
-
-        if is_search(&key) {
-            self.begin_search();
-            return;
-        }
-
-        if is_search_next(&key) {
-            let forward = !key.modifiers.contains(KeyModifiers::SHIFT);
-            self.repeat_search(forward);
-            return;
-        }
-
-        if is_view_toggle(&key) {
-            self.toggle_view();
+        let insert_mode = self.settings.preset() == Preset::Default || self.mode == Mode::Insert;
+        let resolved = self
+            .settings
+            .bindings()
+            .resolve(&key, insert_mode, &mut self.pending);
+        if let Some(command) = resolved
+            && !(self.view.is_some() && matches!(command, Command::Undo | Command::Redo))
+        {
+            self.dispatch(command);
             return;
         }
 
         if self.view.is_some() {
+            let vim_normal = self.settings.preset() == Preset::Vim && self.mode == Mode::Normal;
             match key.code {
                 KeyCode::Up => self.scroll_view_up(),
                 KeyCode::Down => self.scroll_view_down(),
@@ -271,22 +379,82 @@ impl App {
                 KeyCode::PageDown => self.page_view_down(),
                 KeyCode::Home => self.view_home(),
                 KeyCode::End => self.view_end(),
-                KeyCode::Esc => self.toggle_view(),
+                KeyCode::Char('k') if vim_normal => self.scroll_view_up(),
+                KeyCode::Char('j') if vim_normal => self.scroll_view_down(),
                 _ => {}
             }
             return;
         }
 
-        if is_undo(&key) {
-            self.editor.undo();
+        if self.settings.preset() == Preset::Vim && self.mode == Mode::Normal {
+            self.handle_vim_normal(&key);
             return;
         }
 
-        if is_redo(&key) {
-            self.editor.redo();
+        self.handle_insert_key(&key);
+    }
+
+    fn is_bound(&self, key: &KeyEvent, command: Command) -> bool {
+        self.settings.bindings().matches(key, command, true) || {
+            let control = match command {
+                Command::Quit => '\u{11}',
+                Command::Save => '\u{13}',
+                Command::View => '\u{16}',
+                Command::Search => '\u{06}',
+                Command::Undo => '\u{1a}',
+                Command::Redo => '\u{19}',
+                _ => '\0',
+            };
+            control != '\0' && matches!(key.code, KeyCode::Char(character) if character == control)
+        }
+    }
+
+    fn dispatch(&mut self, command: Command) {
+        match command {
+            Command::Save => self.begin_save(),
+            Command::Quit => self.request_quit(),
+            Command::View => self.toggle_view(),
+            Command::Search => self.begin_search(),
+            Command::SearchNext => self.repeat_search(true),
+            Command::SearchPrev => self.repeat_search(false),
+            Command::Undo => self.editor.undo(),
+            Command::Redo => self.editor.redo(),
+        }
+    }
+
+    fn handle_vim_normal(&mut self, key: &KeyEvent) {
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
             return;
         }
 
+        match key.code {
+            KeyCode::Char('h') => self.editor.move_left(),
+            KeyCode::Char('j') => self.editor.move_down(),
+            KeyCode::Char('k') => self.editor.move_up(),
+            KeyCode::Char('l') => self.editor.move_right(),
+            KeyCode::Char('w') => self.editor.move_word_right(),
+            KeyCode::Char('b') => self.editor.move_word_left(),
+            KeyCode::Char('0') => self.editor.move_home(),
+            KeyCode::Char('$') => self.editor.move_end(),
+            KeyCode::Char('x') => self.editor.delete(),
+            KeyCode::Char('i') => self.mode = Mode::Insert,
+            KeyCode::Char('a') => {
+                self.editor.move_right();
+                self.mode = Mode::Insert;
+            }
+            KeyCode::Char('o') => {
+                self.editor.move_end();
+                self.editor.insert_newline();
+                self.mode = Mode::Insert;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_insert_key(&mut self, key: &KeyEvent) {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
@@ -304,10 +472,66 @@ impl App {
             KeyCode::End => self.editor.move_end(),
             KeyCode::PageUp => self.editor.page_up(),
             KeyCode::PageDown => self.editor.page_down(),
-            KeyCode::Char(character) if is_text_input(&key) && !character.is_control() => {
+            KeyCode::Char(character) if is_text_input(key) && !character.is_control() => {
                 self.editor.insert_char(character);
             }
             _ => {}
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => self.click_at(mouse.column, mouse.row),
+            MouseEventKind::ScrollUp => self.wheel(-WHEEL_LINES),
+            MouseEventKind::ScrollDown => self.wheel(WHEEL_LINES),
+            _ => {}
+        }
+    }
+
+    fn click_at(&mut self, column: u16, row: u16) {
+        let area = self.text_area;
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let relative_row = row.saturating_sub(area.y);
+        let relative_column = column.saturating_sub(area.x);
+        if relative_row >= area.height || relative_column >= area.width {
+            return;
+        }
+
+        if self.view.is_some() {
+            let view_row = usize::from(relative_row) + self.view_scroll();
+            let total = self.view_lines().len();
+            let ratio = progress(view_row, 0, total);
+            let viewport = self.editor.viewport_height();
+            let target = from_ratio(ratio, viewport, self.editor.rows().len());
+            self.toggle_view();
+            self.editor.set_scroll_row(target);
+            let rows = self.editor.rows();
+            if let Some(row) = rows.get(target) {
+                self.editor.set_cursor(row.line, row.start);
+            }
+            return;
+        }
+
+        let row_index = usize::from(relative_row) + self.editor.scroll_row();
+        if let Some((line, cursor_column)) = self
+            .editor
+            .position_at(row_index, usize::from(relative_column))
+        {
+            self.editor.set_cursor(line, cursor_column);
+        }
+    }
+
+    fn wheel(&mut self, delta: isize) {
+        if let Some(view) = &mut self.view {
+            let current = isize::try_from(view.scroll).unwrap_or(isize::MAX);
+            let limit = isize::try_from(max_scroll(view)).unwrap_or(isize::MAX);
+            let target = current.saturating_add(delta).clamp(0, limit);
+            view.scroll = usize::try_from(target).unwrap_or(0);
+        } else {
+            self.editor.scroll_rows(delta);
         }
     }
 
@@ -318,19 +542,6 @@ impl App {
             self.set_message(QUIT_WARNING, false);
         } else {
             self.running = false;
-        }
-    }
-
-    fn handle_quit_confirmation(&mut self, key: KeyEvent) {
-        if is_quit(&key) {
-            self.running = false;
-        } else if is_save(&key) {
-            self.confirm_quit = false;
-            self.clear_message();
-            self.begin_save();
-        } else {
-            self.confirm_quit = false;
-            self.clear_message();
         }
     }
 
@@ -564,36 +775,8 @@ impl App {
     }
 }
 
-fn is_quit(key: &KeyEvent) -> bool {
-    let control = key.modifiers.contains(KeyModifiers::CONTROL);
-
-    (control && matches!(key.code, KeyCode::Char('q' | 'Q')))
-        || matches!(key.code, KeyCode::Char('\u{11}'))
-}
-
-fn is_save(key: &KeyEvent) -> bool {
-    let control = key.modifiers.contains(KeyModifiers::CONTROL);
-
-    (control && matches!(key.code, KeyCode::Char('s' | 'S')))
-        || matches!(key.code, KeyCode::Char('\u{13}'))
-}
-
-fn is_view_toggle(key: &KeyEvent) -> bool {
-    let control = key.modifiers.contains(KeyModifiers::CONTROL);
-
-    (control && matches!(key.code, KeyCode::Char('v' | 'V')))
-        || matches!(key.code, KeyCode::Char('\u{16}'))
-}
-
-fn is_search(key: &KeyEvent) -> bool {
-    let control = key.modifiers.contains(KeyModifiers::CONTROL);
-
-    (control && matches!(key.code, KeyCode::Char('f' | 'F')))
-        || matches!(key.code, KeyCode::Char('\u{06}'))
-}
-
-fn is_search_next(key: &KeyEvent) -> bool {
-    matches!(key.code, KeyCode::F(3))
+fn is_escape(key: &KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Esc)
 }
 
 fn find_matches(lines: &[String], query: &str) -> Vec<SearchMatch> {
@@ -636,19 +819,21 @@ fn lowercase_graphemes(text: &str) -> Vec<String> {
     text.graphemes(true).map(str::to_lowercase).collect()
 }
 
-fn is_undo(key: &KeyEvent) -> bool {
-    let control = key.modifiers.contains(KeyModifiers::CONTROL);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-
-    control && !shift && matches!(key.code, KeyCode::Char('z' | 'Z' | '\u{1a}'))
+fn progress(current: usize, viewport: usize, total: usize) -> f64 {
+    let max = total.saturating_sub(viewport);
+    if max == 0 {
+        return 0.0;
+    }
+    (current.min(max) as f64) / (max as f64)
 }
 
-fn is_redo(key: &KeyEvent) -> bool {
-    let control = key.modifiers.contains(KeyModifiers::CONTROL);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-
-    (control && matches!(key.code, KeyCode::Char('y' | 'Y' | '\u{19}')))
-        || (control && shift && matches!(key.code, KeyCode::Char('z' | 'Z')))
+fn from_ratio(ratio: f64, viewport: usize, total: usize) -> usize {
+    let max = total.saturating_sub(viewport);
+    if max == 0 {
+        return 0;
+    }
+    let scaled = (ratio * max as f64).round().clamp(0.0, max as f64);
+    scaled as usize
 }
 
 fn max_scroll(view: &View) -> usize {
@@ -674,9 +859,21 @@ mod tests {
     use std::fs;
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::layout::Rect;
 
-    use super::{App, PromptKind, find_matches};
+    use super::{App, PromptKind, WHEEL_LINES, find_matches};
     use crate::editor::Editor;
+    use crate::keys::Settings;
+    use crate::theme::Theme;
+
+    fn vim_app(text: &str) -> App {
+        let settings = Settings::for_test("keymap = \"vim\"", None);
+        App::with_options(Editor::from_text(text, None), Theme::ansi(), settings)
+    }
+
+    fn press(app: &mut App, character: char) {
+        app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+    }
 
     #[test]
     fn pide_un_nombre_y_guarda_un_archivo_nuevo() {
@@ -974,5 +1171,235 @@ mod tests {
 
         assert_eq!(matches.len(), 1);
         assert_eq!((matches[0].start, matches[0].end), (3, 6));
+    }
+
+    #[test]
+    fn vim_mueve_el_cursor_en_modo_normal() {
+        let mut app = vim_app("hola\nmundo");
+        assert_eq!(app.mode_label(), "NORMAL");
+
+        press(&mut app, 'l');
+        assert_eq!(app.editor.cursor_column(), 1);
+
+        press(&mut app, 'j');
+        assert_eq!(app.editor.cursor_line(), 1);
+
+        press(&mut app, '$');
+        assert_eq!(app.editor.cursor_column(), 5);
+
+        press(&mut app, '0');
+        assert_eq!(app.editor.cursor_column(), 0);
+    }
+
+    #[test]
+    fn vim_inserta_y_vuelve_a_normal() {
+        let mut app = vim_app("hola");
+
+        press(&mut app, 'i');
+        assert_eq!(app.mode_label(), "INSERT");
+        for character in "xyz".chars() {
+            press(&mut app, character);
+        }
+        assert_eq!(app.editor.content(), "xyzhola");
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode_label(), "NORMAL");
+
+        press(&mut app, 'x');
+        assert_eq!(app.editor.content(), "xyzola");
+    }
+
+    #[test]
+    fn vim_abrir_linea_inserta_debajo() {
+        let mut app = vim_app("uno\ndos");
+        press(&mut app, 'l');
+        press(&mut app, 'o');
+
+        assert_eq!(app.editor.content(), "uno\n\ndos");
+        assert_eq!(app.mode_label(), "INSERT");
+    }
+
+    #[test]
+    fn vim_guarda_y_sale_con_linea_de_comandos() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nota.md");
+        let mut app = vim_app("hola");
+        app.editor.set_path(path.clone());
+        app.editor.insert_char('!');
+
+        press(&mut app, ':');
+        press(&mut app, 'w');
+        assert_eq!(fs::read_to_string(&path).unwrap(), "!hola");
+        assert!(!app.editor.is_modified());
+
+        press(&mut app, ':');
+        press(&mut app, 'q');
+        assert!(!app.running);
+    }
+
+    #[test]
+    fn vim_busca_y_repite_la_busqueda() {
+        let mut app = vim_app("uno dos uno dos");
+
+        press(&mut app, '/');
+        assert_eq!(app.prompt_kind(), Some(PromptKind::Search));
+        for character in "dos".chars() {
+            press(&mut app, character);
+        }
+        assert_eq!(app.editor.cursor_column(), 4);
+
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode_label(), "NORMAL");
+
+        press(&mut app, 'n');
+        assert_eq!(app.message(), Some("Coincidencia 2 de 2"));
+        press(&mut app, 'N');
+        assert_eq!(app.editor.cursor_column(), 4);
+    }
+
+    #[test]
+    fn vim_deshace_y_rehace() {
+        let mut app = vim_app("hola");
+        press(&mut app, 'i');
+        press(&mut app, '!');
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        press(&mut app, 'u');
+        assert_eq!(app.editor.content(), "hola");
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert_eq!(app.editor.content(), "!hola");
+    }
+
+    #[test]
+    fn los_atajos_personalizados_sustituyen_a_los_predeterminados() {
+        let settings = Settings::for_test("[bindings]\nsave = [\"Ctrl+Shift+S\"]", None);
+        let mut app = App::with_options(Editor::from_text("hola", None), Theme::ansi(), settings);
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(app.prompt_input().is_none());
+
+        app.handle_key(KeyEvent::new(
+            KeyCode::Char('S'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert_eq!(app.prompt_kind(), Some(PromptKind::SaveAs));
+    }
+
+    #[test]
+    fn el_clic_coloca_el_cursor_en_la_fuente() {
+        let mut app = App::new(Editor::from_text("hola\nmundo", None));
+        app.set_text_area(Rect::new(0, 0, 10, 3));
+        app.editor.ensure_visible(10, 3);
+
+        app.click_at(3, 1);
+
+        assert_eq!(app.editor.cursor_line(), 1);
+        assert_eq!(app.editor.cursor_column(), 3);
+    }
+
+    #[test]
+    fn el_clic_respeta_el_desplazamiento_de_la_fuente() {
+        let text = (0..10)
+            .map(|index| format!("linea{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut app = App::new(Editor::from_text(&text, None));
+        app.set_text_area(Rect::new(0, 0, 10, 3));
+        app.editor.ensure_visible(10, 3);
+        app.editor.set_scroll_row(5);
+
+        app.click_at(0, 0);
+
+        assert_eq!(app.editor.cursor_line(), 5);
+    }
+
+    #[test]
+    fn la_rueda_desplaza_la_fuente_y_la_vista() {
+        let text = (0..40)
+            .map(|index| format!("línea {index}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let mut app = App::new(Editor::from_text(&text, None));
+        app.set_text_area(Rect::new(0, 0, 30, 5));
+        app.editor.ensure_visible(30, 5);
+
+        app.wheel(WHEEL_LINES);
+        assert_eq!(app.editor.scroll_row(), 3);
+
+        app.toggle_view();
+        app.ensure_view(30, 5);
+        let before = app.view_scroll();
+        app.wheel(WHEEL_LINES);
+        assert_eq!(app.view_scroll(), before + 3);
+    }
+
+    #[test]
+    fn conserva_la_posicion_al_cambiar_de_vista_y_volver() {
+        let text = (0..40)
+            .map(|index| format!("línea {index}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let mut app = App::new(Editor::from_text(&text, None));
+        app.editor.ensure_visible(30, 5);
+        let source_end = app.editor.rows().len().saturating_sub(5);
+        app.editor.set_scroll_row(source_end);
+
+        app.toggle_view();
+        app.ensure_view(30, 5);
+        let view_end = app.view_lines().len().saturating_sub(5);
+        assert_eq!(app.view_scroll(), view_end);
+
+        app.toggle_view();
+        assert_eq!(app.editor.scroll_row(), source_end);
+    }
+
+    #[test]
+    fn conserva_una_posicion_intermedia_al_cambiar_de_vista() {
+        let text = (0..40)
+            .map(|index| format!("línea {index}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let mut app = App::new(Editor::from_text(&text, None));
+        app.editor.ensure_visible(30, 5);
+        let source_end = app.editor.rows().len().saturating_sub(5);
+        app.editor.set_scroll_row(source_end / 2);
+
+        app.toggle_view();
+        app.ensure_view(30, 5);
+        let view_scroll = app.view_scroll();
+        let view_end = app.view_lines().len().saturating_sub(5);
+        assert!(view_scroll > 0 && view_scroll < view_end);
+
+        app.toggle_view();
+        let expected = (view_scroll as f64 / view_end as f64 * source_end as f64).round() as usize;
+        assert_eq!(app.editor.scroll_row(), expected);
+    }
+
+    #[test]
+    fn el_clic_en_la_vista_vuelve_a_la_fuente_cerca_de_la_linea() {
+        let text = (0..40)
+            .map(|index| format!("línea {index}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let mut app = App::new(Editor::from_text(&text, None));
+        app.set_text_area(Rect::new(0, 0, 30, 5));
+        app.editor.ensure_visible(30, 5);
+        app.toggle_view();
+        app.ensure_view(30, 5);
+        app.view_end();
+        let view_total = app.view_lines().len();
+        let view_row = 4 + app.view_scroll();
+        let ratio = view_row as f64 / view_total as f64;
+        let source_rows = app.editor.rows().len();
+        let viewport = app.editor.viewport_height();
+        let target = (ratio * source_rows.saturating_sub(viewport) as f64).round() as usize;
+        let expected = app.editor.rows()[target].line;
+
+        app.click_at(0, 4);
+
+        assert!(!app.is_view_mode());
+        assert!(app.editor.scroll_row() > 0);
+        assert_eq!(app.editor.cursor_line(), expected);
     }
 }
